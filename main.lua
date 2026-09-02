@@ -1,5 +1,5 @@
 -- =========================================================================
---  RIVALS MASTER MEMORY SKIN SWAPPER (Arch Crossbow Wings & Rig Fixed)
+--  RIVALS ULTIMATE HYBRID MASTER SKIN CHANGER (Mesh + Model + Audio + VFX)
 -- =========================================================================
 
 if not pcall(memory_read, "int", game.Address) then 
@@ -31,8 +31,6 @@ if wf then
         retries = retries + 1
     end
 end
-
-task.wait(1.5)
 
 local mrd, mwr, pcall, ipairs, pairs = memory_read, memory_write, pcall, ipairs, pairs
 local floor = math.floor
@@ -67,13 +65,329 @@ local ga = function(f)
     if b and e then return b, e end 
 end
 
-local fs = function(b, e, t) 
-    if not b or not e then return end
-    for i = 0, floor((e - b) / 16) - 1 do 
-        local a = b + i * 16
-        if rd(a) == t then return a end 
-    end 
-end
+local WEAPON_SLOT_INDEX = {
+    ["Assault Rifle"] = 0, ["Warper"] = 1, ["Bow"] = 2, ["Burst Rifle"] = 3, ["Chainsaw"] = 4, ["Sniper"] = 5,
+    ["Daggers"] = 6, ["Jump Pad"] = 7, ["Permafrost"] = 8, ["Uzi"] = 9, ["Exogun"] = 10, ["Maul"] = 11,
+    ["Grenade"] = 12, ["Flare Gun"] = 13, ["Flashbang"] = 14, ["Freeze Ray"] = 15, ["Flamethrower"] = 16,
+    ["Energy Rifle"] = 17, ["Gunblade"] = 18, ["Handgun"] = 19, ["Spear"] = 20, ["Katana"] = 21,
+    ["Knife"] = 22, ["Medkit"] = 23, ["Minigun"] = 24, ["Molotov"] = 25, ["Paintball Gun"] = 26,
+    ["RPG"] = 27, ["Revolver"] = 28, ["Riot Shield"] = 29, ["Satchel"] = 30, ["Scythe"] = 32,
+    ["Shorty"] = 33, ["Shotgun"] = 34, ["Slingshot"] = 35, ["Smoke Grenade"] = 36, ["Crossbow"] = 37,
+    ["Spray"] = 38, ["Battle Axe"] = 39, ["Trowel"] = 40, ["Grenade Launcher"] = 41, ["Warpstone"] = 42,
+    ["Distortion"] = 43, ["Subspace Tripmine"] = 44, ["Energy Pistols"] = 45, ["Fists"] = 46,
+    ["Grappler"] = 47, ["War Horn"] = 48
+}
+
+-- Simple 1-part skins that benefit directly from clean Mesh & Texture swapping
+local MESH_SWAP_CANDIDATES = {
+    ["Hand Gun"] = true,
+    ["Armature.001"] = true,
+    ["Balisong"] = true,
+    ["Chancla"] = true,
+    ["Stick"] = true,
+    ["Machete"] = true,
+    ["Candy Cane"] = true,
+    ["Pencil"] = true,
+    ["Water Gun"] = true,
+    ["Karambit"] = true,
+    ["Keylisong"] = true,
+    ["Keyrambit"] = true,
+    ["Banana Flare"] = true,
+    ["Boxing Gloves"] = true,
+    ["Brass Knuckles"] = true
+}
+
+-- 100% Complete Case & Subfolder Lookup Table
+local EXACT_SKIN_MAP = {
+    -- Bundles
+    ["Box of Chocolates"] = {folder = "Bundles", name = "Medkit"},
+    ["Balloon Launcher"] = {folder = "Bundles", name = "Grenade Launcher"},
+    ["Balloon Axe"] = {folder = "Bundles", name = "Battle Axe"},
+    ["Balloon Bow"] = {folder = "Bundles", name = "Bow"},
+    ["Balloon Shorty"] = {folder = "Bundles", name = "Too Shorty"},
+    ["Balloon Shotgun"] = {folder = "Bundles", name = "Shotgun"},
+    ["Rocket Launcher"] = {folder = "Bundles", name = "Rocket Launcher"},
+    ["Cuddle Bomb"] = {folder = "Bundles", name = "Grenade"},
+    ["Ice Maul"] = {folder = "Bundles", name = "Ice Maul"},
+    ["Ban Hammer"] = {folder = "Bundles", name = "Maul"},
+    ["Giant Pencil"] = {folder = "Bundles", name = "Spear"},
+    ["10B Visits"] = {folder = "Bundles", name = "10B Visits"},
+    ["Event Horizon"] = {folder = "Bundles", name = "Event Horizon"},
+    ["Fighter Jet"] = {folder = "Bundles", name = "Fighter Jet"},
+    ["Aces"] = {folder = "Skin Case 2", name = "Aces"},
+    ["Apex Pistols"] = {folder = "Bundles", name = "Apex Pistols"},
+    ["Apex Rifle"] = {folder = "Bundles", name = "Apex Rifle"},
+    ["Crystal Katana"] = {folder = "Bundles", name = "Crystal Katana"},
+    ["Pixel Katana"] = {folder = "Bundles", name = "Pixel Katana"},
+    ["Linked Sword"] = {folder = "Bundles", name = "Linked Sword"},
+    ["Caladbolg"] = {folder = "Bundles", name = "Caladbolg"},
+    ["Cutlass"] = {folder = "Bundles", name = "Cutlass"},
+    ["Riptide Katana"] = {folder = "Bundles", name = "Riptide Katana"},
+
+    -- Skin Case 1
+    ["Blaster"] = {folder = "Skin Case", name = "Handgun"},
+    ["Advanced Satchel"] = {folder = "Skin Case", name = "Satchel"},
+    ["Boomstick"] = {folder = "Skin Case", name = "Shotgun"},
+    ["Blobsaw"] = {folder = "Skin Case", name = "Chainsaw"},
+    ["Boxing Gloves"] = {folder = "Skin Case", name = "Fists"},
+    ["Door"] = {folder = "Skin Case", name = "Door"},
+    ["Saber"] = {folder = "Skin Case", name = "Saber"},
+    ["Chancla"] = {folder = "Skin Case", name = "Chancla"},
+    ["Stick"] = {folder = "Skin Case", name = "Stick"},
+    ["Water Uzi"] = {folder = "Skin Case", name = "Water Uzi"},
+    ["Lasergun 3000"] = {folder = "Skin Case", name = "Lasergun 3000"},
+    ["Pixel Flamethrower"] = {folder = "Skin Case", name = "Pixel Flamethrower"},
+    ["Nuke Launcher"] = {folder = "Skin Case", name = "Nuke Launcher"},
+    ["Emoji Cloud"] = {folder = "Skin Case", name = "Emoji Cloud"},
+    ["Coffee"] = {folder = "Skin Case", name = "Coffee"},
+    ["Disco Ball"] = {folder = "Skin Case", name = "Disco Ball"},
+    ["AK-47"] = {folder = "Skin Case", name = "AK-47"},
+    ["Compound Bow"] = {folder = "Skin Case", name = "Compound Bow"},
+    ["Not So Shorty"] = {folder = "Skin Case", name = "Not So Shorty"},
+    ["Don't Press"] = {folder = "Skin Case", name = "Don't Press"},
+    ["Singularity"] = {folder = "Skin Case", name = "Singularity"},
+    ["Temporal Ray"] = {folder = "Skin Case", name = "Temporal Ray"},
+    ["Hacker Pistols"] = {folder = "Skin Case", name = "Hacker Pistols"},
+    ["Lovely Spray"] = {folder = "Skin Case", name = "Lovely Spray"},
+    ["Electro Rifle"] = {folder = "Skin Case", name = "Electro Rifle"},
+    ["Warpstone"] = {folder = "Skin Case", name = "Warpstone"},
+    ["The Shred"] = {folder = "Skin Case", name = "The Shred"},
+    ["Scythe of Death"] = {folder = "Skin Case", name = "Scythe of Death"},
+    ["Sandwich"] = {folder = "Skin Case", name = "Sandwich"},
+    ["Trampoline"] = {folder = "Skin Case", name = "Trampoline"},
+    ["Hyper Gunblade"] = {folder = "Skin Case", name = "Hyper Gunblade"},
+    ["Pixel Sniper"] = {folder = "Skin Case", name = "Pixel Sniper"},
+    ["Swashbuckler"] = {folder = "Skin Case", name = "Swashbuckler"},
+    ["Plasma Distortion"] = {folder = "Skin Case", name = "Plasma Distortion"},
+    ["Glitter Warper"] = {folder = "Skin Case", name = "Glitter Warper"},
+    ["Trumpet"] = {folder = "Skin Case", name = "Trumpet"},
+
+    -- Skin Case 2
+    ["Camera"] = {folder = "Skin Case 2", name = "Flashbang"},
+    ["Balance"] = {folder = "Skin Case 2", name = "Smoke Grenade"},
+    ["Garden Shovel"] = {folder = "Skin Case 2", name = "Trowel"},
+    ["Aqua Burst"] = {folder = "Skin Case 2", name = "Burst Rifle"},
+    ["Bounce House"] = {folder = "Skin Case 2", name = "Jump Pad"},
+    ["Energy Shield"] = {folder = "Skin Case 2", name = "Energy Shield"},
+    ["Notebook Satchel"] = {folder = "Skin Case 2", name = "Notebook Satchel"},
+    ["Nail Gun"] = {folder = "Skin Case 2", name = "Nail Gun"},
+    ["Hydro Rifle"] = {folder = "Skin Case 2", name = "Hydro Rifle"},
+    ["Void Pistols"] = {folder = "Skin Case 2", name = "Void Pistols"},
+    ["Megaphone"] = {folder = "Skin Case 2", name = "Megaphone"},
+    ["Hyper Sniper"] = {folder = "Skin Case 2", name = "Hyper Sniper"},
+    ["Magma Distortion"] = {folder = "Skin Case 2", name = "Magma Distortion"},
+    ["Goalpost"] = {folder = "Skin Case 2", name = "Goalpost"},
+    ["Raven Bow"] = {folder = "Skin Case 2", name = "Raven Bow"},
+    ["Hyper Shotgun"] = {folder = "Skin Case 2", name = "Hyper Shotgun"},
+    ["Dynamite Gun"] = {folder = "Skin Case 2", name = "Dynamite Gun"},
+    ["Pixel Minigun"] = {folder = "Skin Case 2", name = "Pixel Minigun"},
+    ["Water Balloon"] = {folder = "Skin Case 2", name = "Water Balloon"},
+    ["Crude Gunblade"] = {folder = "Skin Case 2", name = "Crude Gunblade"},
+    ["Lamethrower"] = {folder = "Skin Case 2", name = "Lamethrower"},
+    ["Spring"] = {folder = "Skin Case 2", name = "Spring"},
+    ["Brass Knuckles"] = {folder = "Skin Case 2", name = "Brass Knuckles"},
+    ["Electro Uzi"] = {folder = "Skin Case 2", name = "Electro Uzi"},
+    ["Lovely Shorty"] = {folder = "Skin Case 2", name = "Lovely Shorty"},
+    ["Ray Gun"] = {folder = "Skin Case 2", name = "Ray Gun"},
+    ["Lightning Bolt"] = {folder = "Skin Case 2", name = "Lightning Bolt"},
+    ["Torch"] = {folder = "Skin Case 2", name = "Torch"},
+    ["Spaceship Launcher"] = {folder = "Skin Case 2", name = "Spaceship Launcher"},
+    ["Sheriff"] = {folder = "Skin Case 2", name = "Sheriff"},
+    ["Arcane Warper"] = {folder = "Skin Case 2", name = "Arcane Warper"},
+    ["Laptop"] = {folder = "Skin Case 2", name = "Laptop"},
+    ["Karambit"] = {folder = "Skin Case 2", name = "Karambit"},
+    ["Uranium Launcher"] = {folder = "Skin Case 2", name = "Uranium Launcher"},
+    ["Teleport Disc"] = {folder = "Skin Case 2", name = "Teleport Disc"},
+    ["Ban Axe"] = {folder = "Skin Case 2", name = "Ban Axe"},
+    ["Paper Planes"] = {folder = "Skin Case 2", name = "Paper Planes"},
+    ["Harpoon Crossbow"] = {folder = "Skin Case 2", name = "Harpoon Crossbow"},
+    ["Handsaws"] = {folder = "Skin Case 2", name = "Handsaws"},
+    ["Hand Gun"] = {folder = "Skin Case 2", name = "Hand Gun"},
+
+    -- Skin Case 3
+    ["Balisong"] = {folder = "Skin Case 3", name = "Knife"},
+    ["DIY Tripmine"] = {folder = "Skin Case 3", name = "Subspace Tripmine"},
+    ["Air Horn"] = {folder = "Skin Case 3", name = "War Horn"},
+    ["Banana Flare"] = {folder = "Skin Case 3", name = "Flare Gun"},
+    ["Tommy Gun"] = {folder = "Skin Case 3", name = "Tommy Gun"},
+    ["FAMAS"] = {folder = "Skin Case 3", name = "FAMAS"},
+    ["Dream Bow"] = {folder = "Skin Case 3", name = "Dream Bow"},
+    ["Stellar Katana"] = {folder = "Skin Case 3", name = "Stellar Katana"},
+    ["Peppergun"] = {folder = "Skin Case 3", name = "Peppergun"},
+    ["Squid Launcher"] = {folder = "Skin Case 3", name = "Squid Launcher"},
+    ["Glitterthrower"] = {folder = "Skin Case 3", name = "Glitterthrower"},
+    ["Medkitty"] = {folder = "Skin Case 3", name = "Medkitty"},
+    ["Cerulean Axe"] = {folder = "Skin Case 3", name = "Cerulean Axe"},
+    ["Repulsor"] = {folder = "Skin Case 3", name = "Repulsor"},
+    ["Hotel Bell"] = {folder = "Skin Case 3", name = "Hotel Bell"},
+    ["Cactus Shotgun"] = {folder = "Skin Case 3", name = "Cactus Shotgun"},
+    ["Shady Chicken Sandwich"] = {folder = "Skin Case 3", name = "Shady Chicken Sandwich"},
+    ["Bag o' Money"] = {folder = "Skin Case 3", name = "Bag o' Money"},
+    ["Gunsaw"] = {folder = "Skin Case 3", name = "Gunsaw"},
+    ["Electropunk Warpstone"] = {folder = "Skin Case 3", name = "Electropunk Warpstone"},
+    ["Masterpiece"] = {folder = "Skin Case 3", name = "Masterpiece"},
+    ["Spray Bottle"] = {folder = "Skin Case 3", name = "Spray Bottle"},
+    ["Shurikens"] = {folder = "Skin Case 3", name = "Shurikens"},
+    ["Gearnade Launcher"] = {folder = "Skin Case 3", name = "Gearnade Launcher"},
+    ["Cyber Distortion"] = {folder = "Skin Case 3", name = "Cyber Distortion"},
+    ["Void Rifle"] = {folder = "Skin Case 3", name = "Void Rifle"},
+    ["Fists of Hurt"] = {folder = "Skin Case 3", name = "Fists of Hurt"},
+
+    -- Spooky Skin Case
+    ["Boneclaw Revolver"] = {folder = "Spooky Skin Case", name = "Revolver"},
+    ["Boneclaw Spray"] = {folder = "Spooky Skin Case", name = "Spray"},
+    ["Crossbone"] = {folder = "Spooky Skin Case", name = "Crossbow"},
+    ["Boneblade"] = {folder = "Spooky Skin Case", name = "Gunblade"},
+    ["Exogourd"] = {folder = "Spooky Skin Case", name = "Exogun"},
+    ["Boneshot"] = {folder = "Spooky Skin Case", name = "Slingshot"},
+    ["Demon Uzi"] = {folder = "Spooky Skin Case", name = "Demon Uzi"},
+    ["Trick or Treat"] = {folder = "Spooky Skin Case", name = "Trick or Treat"},
+    ["Bat Bow"] = {folder = "Spooky Skin Case", name = "Bat Bow"},
+    ["Vexed Candle"] = {folder = "Spooky Skin Case", name = "Vexed Candle"},
+    ["Bucket of Candy"] = {folder = "Spooky Skin Case", name = "Bucket of Candy"},
+    ["Pumpkin Claws"] = {folder = "Spooky Skin Case", name = "Pumpkin Claws"},
+    ["Buzzsaw"] = {folder = "Spooky Skin Case", name = "Buzzsaw"},
+    ["Skullbang"] = {folder = "Spooky Skin Case", name = "Skullbang"},
+    ["Jack O'Thrower"] = {folder = "Spooky Skin Case", name = "Jack O'Thrower"},
+    ["Machete"] = {folder = "Spooky Skin Case", name = "Machete"},
+    ["Evil Trident"] = {folder = "Spooky Skin Case", name = "Evil Trident"},
+    ["Boneclaw Rifle"] = {folder = "Spooky Skin Case", name = "Boneclaw Rifle"},
+    ["Pumpkin Launcher"] = {folder = "Spooky Skin Case", name = "Pumpkin Launcher"},
+    ["Vexed Flare Gun"] = {folder = "Spooky Skin Case", name = "Vexed Flare Gun"},
+    ["Spectral Burst"] = {folder = "Spooky Skin Case", name = "Spectral Burst"},
+    ["Boneclaw Horn"] = {folder = "Spooky Skin Case", name = "Boneclaw Horn"},
+    ["Brain Gun"] = {folder = "Spooky Skin Case", name = "Brain Gun"},
+    ["Eyething Sniper"] = {folder = "Spooky Skin Case", name = "Eyething Sniper"},
+    ["Pumpkin Handgun"] = {folder = "Spooky Skin Case", name = "Pumpkin Handgun"},
+    ["Eyeball"] = {folder = "Spooky Skin Case", name = "Eyeball"},
+    ["Demon Shorty"] = {folder = "Spooky Skin Case", name = "Demon Shorty"},
+    ["Bat Scythe"] = {folder = "Spooky Skin Case", name = "Bat Scythe"},
+    ["Pumpkin Carver"] = {folder = "Spooky Skin Case", name = "Pumpkin Carver"},
+    ["Broomstick"] = {folder = "Spooky Skin Case", name = "Broomstick"},
+    ["Skull Launcher"] = {folder = "Spooky Skin Case", name = "Skull Launcher"},
+    ["Soul Grenade"] = {folder = "Spooky Skin Case", name = "Soul Grenade"},
+    ["Bat Daggers"] = {folder = "Spooky Skin Case", name = "Bat Daggers"},
+    ["Mimic Axe"] = {folder = "Spooky Skin Case", name = "Mimic Axe"},
+    ["Potion Satchel"] = {folder = "Spooky Skin Case", name = "Potion Satchel"},
+    ["Tombstone Shield"] = {folder = "Spooky Skin Case", name = "Tombstone Shield"},
+    ["Soul Pistols"] = {folder = "Spooky Skin Case", name = "Soul Pistols"},
+    ["Experiment D15"] = {folder = "Spooky Skin Case", name = "Experiment D15"},
+    ["Experiment W4"] = {folder = "Spooky Skin Case", name = "Experiment W4"},
+    ["Spider Web"] = {folder = "Spooky Skin Case", name = "Spider Web"},
+    ["Warpeye"] = {folder = "Spooky Skin Case", name = "Warpeye"},
+    ["Warpbone"] = {folder = "Spooky Skin Case", name = "Warpbone"},
+    ["Soul Rifle"] = {folder = "Spooky Skin Case", name = "Soul Rifle"},
+    ["Pumpkin Minigun"] = {folder = "Spooky Skin Case", name = "Pumpkin Minigun"},
+
+    -- Summer Skin Case
+    ["Bubblethrower"] = {folder = "Summer Skin Case", name = "Flamethrower"},
+    ["Campfire Stick"] = {folder = "Summer Skin Case", name = "Molotov"},
+    ["Bubble Ray"] = {folder = "Summer Skin Case", name = "Freeze Ray"},
+    ["Boba Gun"] = {folder = "Summer Skin Case", name = "Paintball Gun"},
+    ["Pearl Rifle"] = {folder = "Summer Skin Case", name = "Pearl Rifle"},
+    ["Plastic Flamingo"] = {folder = "Summer Skin Case", name = "Plastic Flamingo"},
+    ["Bubbler"] = {folder = "Summer Skin Case", name = "Bubbler"},
+    ["Scooper"] = {folder = "Summer Skin Case", name = "Scooper"},
+    ["Sol"] = {folder = "Summer Skin Case", name = "Sol"},
+    ["Lifeguard Whistle"] = {folder = "Summer Skin Case", name = "Lifeguard Whistle"},
+    ["Beach Ball"] = {folder = "Summer Skin Case", name = "Beach Ball"},
+    ["Pocket Volcano"] = {folder = "Summer Skin Case", name = "Pocket Volcano"},
+    ["Sharkbite"] = {folder = "Summer Skin Case", name = "Sharkbite"},
+    ["Chark Kebab"] = {folder = "Summer Skin Case", name = "Chark Kebab"},
+    ["Warp Juice"] = {folder = "Summer Skin Case", name = "Warp Juice"},
+    ["Hazard Sign"] = {folder = "Summer Skin Case", name = "Hazard Sign"},
+    ["Palmshot"] = {folder = "Summer Skin Case", name = "Palmshot"},
+    ["Broken Surfboard"] = {folder = "Summer Skin Case", name = "Broken Surfboard"},
+    ["Cruise Revolver"] = {folder = "Summer Skin Case", name = "Cruise Revolver"},
+    ["Crab Claws"] = {folder = "Summer Skin Case", name = "Crab Claws"},
+    ["Campfire Crossbow"] = {folder = "Summer Skin Case", name = "Campfire Crossbow"},
+    ["Giant Popsicle"] = {folder = "Summer Skin Case", name = "Giant Popsicle"},
+    ["Bubble Shorty"] = {folder = "Summer Skin Case", name = "Bubble Shorty"},
+    ["Palm Bow"] = {folder = "Summer Skin Case", name = "Palm Bow"},
+    ["Starfish"] = {folder = "Summer Skin Case", name = "Starfish"},
+    ["Bubble Distortion"] = {folder = "Summer Skin Case", name = "Bubble Distortion"},
+    ["Lifeguard Grappler"] = {folder = "Summer Skin Case", name = "Lifeguard Grappler"},
+    ["Pearl Exogun"] = {folder = "Summer Skin Case", name = "Pearl Exogun"},
+    ["Sundae Launcher"] = {folder = "Summer Skin Case", name = "Sundae Launcher"},
+    ["Ducky Uzi"] = {folder = "Summer Skin Case", name = "Ducky Uzi"},
+    ["Sol Rifle"] = {folder = "Summer Skin Case", name = "Sol Rifle"},
+    ["Sol Pistols"] = {folder = "Summer Skin Case", name = "Sol Pistols"},
+    ["Lifeguard Satchel"] = {folder = "Summer Skin Case", name = "Lifeguard Satchel"},
+    ["Sandgun"] = {folder = "Summer Skin Case", name = "Sandgun"},
+    ["Swordfish"] = {folder = "Summer Skin Case", name = "Swordfish"},
+    ["Campfire Sniper"] = {folder = "Summer Skin Case", name = "Campfire Sniper"},
+    ["Shark Tooth"] = {folder = "Summer Skin Case", name = "Shark Tooth"},
+    ["Shark Shotgun"] = {folder = "Summer Skin Case", name = "Shark Shotgun"},
+    ["Cooler"] = {folder = "Summer Skin Case", name = "Cooler"},
+    ["Flamingo Floatie"] = {folder = "Summer Skin Case", name = "Flamingo Floatie"},
+    ["Ice Cream"] = {folder = "Summer Skin Case", name = "Ice Cream"},
+    ["Tiki Axe"] = {folder = "Summer Skin Case", name = "Tiki Axe"},
+    ["Coconut Launcher"] = {folder = "Summer Skin Case", name = "Coconut Launcher"},
+    ["Campfire Spray"] = {folder = "Summer Skin Case", name = "Campfire Spray"},
+    ["Sharksaw"] = {folder = "Summer Skin Case", name = "Sharksaw"},
+    ["Shark Minigun"] = {folder = "Summer Skin Case", name = "Shark Minigun"},
+    ["Fizz Bomb"] = {folder = "Summer Skin Case", name = "Fizz Bomb"},
+    ["Lemonade Gun"] = {folder = "Summer Skin Case", name = "Lemonade Gun"},
+    ["Sand FAMAS"] = {folder = "Summer Skin Case", name = "Sand FAMAS"},
+    ["Permasand"] = {folder = "Summer Skin Case", name = "Permasand"},
+
+    -- Seasons
+    ["Arch Katana"] = {folder = "Seasons", name = "Katana"},
+    ["Arch Uzi"] = {folder = "Seasons", name = "Uzi"},
+    ["Arch Crossbow"] = {folder = "Seasons", name = "Crossbow"},
+    ["Spy Gloves"] = {folder = "Seasons", name = "Spy Gloves"},
+    ["Phoenix Rifle"] = {folder = "Seasons", name = "Phoenix Rifle"},
+    ["Frozen Grenade"] = {folder = "Seasons", name = "Frozen Grenade"},
+    ["Electropunk Warper"] = {folder = "Seasons", name = "Electropunk Warper"},
+    ["Electropunk Distortion"] = {folder = "Seasons", name = "Electropunk Distortion"},
+    ["Unstable Warpstone"] = {folder = "Seasons", name = "Unstable Warpstone"},
+
+    -- Festive Skin Case
+    ["Firework Launcher"] = {folder = "Festive Skin Case", name = "RPG"},
+    ["Pine Burst"] = {folder = "Festive Skin Case", name = "Pine Burst"},
+    ["Snowball Launcher"] = {folder = "Festive Skin Case", name = "Snowball Launcher"},
+    ["Wrapped Shorty"] = {folder = "Festive Skin Case", name = "Wrapped Shorty"},
+    ["Frostbite Bow"] = {folder = "Festive Skin Case", name = "Frostbite Bow"},
+    ["Candy Cane"] = {folder = "Festive Skin Case", name = "Candy Cane"},
+    ["Wrapped Flare Gun"] = {folder = "Festive Skin Case", name = "Wrapped Flare Gun"},
+    ["Suspicious Gift"] = {folder = "Festive Skin Case", name = "Suspicious Gift"},
+    ["Wrapped Freeze Ray"] = {folder = "Festive Skin Case", name = "Wrapped Freeze Ray"},
+    ["Nordic Axe"] = {folder = "Festive Skin Case", name = "Nordic Axe"},
+    ["Frostbite Crossbow"] = {folder = "Festive Skin Case", name = "Frostbite Crossbow"},
+    ["Midnight Festive Exogun"] = {folder = "Festive Skin Case", name = "Midnight Festive Exogun"},
+    ["Pine Spray"] = {folder = "Festive Skin Case", name = "Pine Spray"},
+    ["Mammoth Horn"] = {folder = "Festive Skin Case", name = "Mammoth Horn"},
+    ["Dev-in-the-Box"] = {folder = "Festive Skin Case", name = "Dev-in-the-Box"},
+    ["Jingle Grenade"] = {folder = "Festive Skin Case", name = "Jingle Grenade"},
+    ["Reindeer Slingshot"] = {folder = "Festive Skin Case", name = "Reindeer Slingshot"},
+    ["Snow Shovel"] = {folder = "Festive Skin Case", name = "Snow Shovel"},
+    ["Festive Buzzsaw"] = {folder = "Festive Skin Case", name = "Festive Buzzsaw"},
+    ["Wrapped Minigun"] = {folder = "Festive Skin Case", name = "Wrapped Minigun"},
+    ["New Year Katana"] = {folder = "Festive Skin Case", name = "New Year Katana"},
+    ["Hot Coals"] = {folder = "Festive Skin Case", name = "Hot Coals"},
+    ["Snowblower"] = {folder = "Festive Skin Case", name = "Snowblower"},
+    ["New Year Energy Pistols"] = {folder = "Festive Skin Case", name = "New Year Energy Pistols"},
+    ["Cryo Scythe"] = {folder = "Festive Skin Case", name = "Cryo Scythe"},
+    ["Gingerbread Handgun"] = {folder = "Festive Skin Case", name = "Gingerbread Handgun"},
+    ["Pine Uzi"] = {folder = "Festive Skin Case", name = "Pine Uzi"},
+    ["Shining Star"] = {folder = "Festive Skin Case", name = "Shining Star"},
+    ["New Year Energy Rifle"] = {folder = "Festive Skin Case", name = "New Year Energy Rifle"},
+    ["Milk & Cookies"] = {folder = "Festive Skin Case", name = "Milk & Cookies"},
+    ["Wrapped Shotgun"] = {folder = "Festive Skin Case", name = "Wrapped Shotgun"},
+    ["Snowball Gun"] = {folder = "Festive Skin Case", name = "Snowball Gun"},
+    ["Gingerbread Sniper"] = {folder = "Festive Skin Case", name = "Gingerbread Sniper"},
+    ["Cookies"] = {folder = "Festive Skin Case", name = "Cookies"},
+    ["Snowman Permafrost"] = {folder = "Festive Skin Case", name = "Snowman Permafrost"},
+    ["Elf's Gunblade"] = {folder = "Festive Skin Case", name = "Elf's Gunblade"},
+    ["Sled"] = {folder = "Festive Skin Case", name = "Sled"},
+    ["Snowglobe"] = {folder = "Festive Skin Case", name = "Snowglobe"},
+    ["Jolly Man"] = {folder = "Festive Skin Case", name = "Jolly Man"},
+    ["Sleighstortion"] = {folder = "Festive Skin Case", name = "Sleighstortion"},
+    ["Frost Warper"] = {folder = "Festive Skin Case", name = "Frost Warper"},
+    ["Warpstar"] = {folder = "Festive Skin Case", name = "Warpstar"},
+    ["Sleigh Maul"] = {folder = "Festive Skin Case", name = "Sleigh Maul"},
+    ["Peppermint Sheriff"] = {folder = "Festive Skin Case", name = "Peppermint Sheriff"}
+}
 
 local memoryRestores = {}
 
@@ -96,29 +410,18 @@ local function restoreAllMemory()
     memoryRestores = {}
 end
 
--- Comprehensive clutter & loose attachment cleaner
 local function cleanSkinModel(m)
     if not m then return end
     local mainBody = m:FindFirstChild("Body") or m:FindFirstChild("Model") or m:FindFirstChild("Trunk") or m:FindFirstChild("Bottom") or m:FindFirstChild("LeftBody") or m:GetChildren()[1]
-    local isCrossbow = m.Name:lower():find("crossbow")
 
     for _, c in ipairs(m:GetChildren()) do
         local n = c.Name:lower()
-        -- Detached floating visual parts (never hide wings on Arch Crossbow!)
-        if n:find("leg") or n:find("shell") or n:find("%.r") or n:find("%.l") or n == "_fake" or (n:find("wing") and not isCrossbow) then
+        if n:find("leg") or n:find("shell") or n:find("%.r") or n:find("%.l") or n == "_fake" then
             for _, desc in ipairs(c:GetDescendants()) do
                 if desc.Address then
                     pcall(mwr, "float", desc.Address + OFF.Transparency, 1.0)
                 end
             end
-        -- Ensure Arch Crossbow Wings remain 100% visible and glowing
-        elseif isCrossbow and n:find("wing") then
-            for _, desc in ipairs(c:GetDescendants()) do
-                if desc.Address and desc:IsA("BasePart") and desc.Name ~= "Primary" then
-                    pcall(mwr, "float", desc.Address + OFF.Transparency, 0.0)
-                end
-            end
-        -- Sub-meshes that belong to the primary weapon handle
         elseif mainBody and c ~= mainBody and (n:find("drill") or n:find("sword") or n:find("slice") or n:find("top") or n:find("front") or n:find("back") or n:find("coconut") or n:find("leaf") or n:find("bullet")) then
             for _, p in ipairs(c:GetChildren()) do
                 p.Parent = mainBody
@@ -127,175 +430,153 @@ local function cleanSkinModel(m)
     end
 end
 
-local function swc(parent, default, skin) 
-    if not parent or not default or not skin then return false end
-    if default == skin then return false end
-    local b, e = ga(parent)
-    if not b then return false end
-    local sl = fs(b, e, default.Address)
-    if not sl then return false end
+local function swapMeshAndTexture(defaultModel, skinModel)
+    if not defaultModel or not skinModel then return false end
     
-    cleanSkinModel(skin)
+    local defMesh = nil
+    for _, desc in ipairs(defaultModel:GetDescendants()) do
+        if desc:IsA("MeshPart") then
+            defMesh = desc
+            break
+        end
+    end
     
-    local origSlot = rd(sl)
-    local origName = rd(skin.Address + OFF.NameContainer)
-    local origParent = rd(skin.Address + OFF.Parent)
+    local skinMesh = nil
+    for _, desc in ipairs(skinModel:GetDescendants()) do
+        if desc:IsA("MeshPart") then
+            skinMesh = desc
+            break
+        end
+    end
     
-    registerRestore(sl, origSlot, skin.Address, origName, origParent)
-    
-    wr(skin.Address + OFF.NameContainer, rd(default.Address + OFF.NameContainer))
-    wr(skin.Address + OFF.Parent, parent.Address)
-    
-    local ok = pcall(function() 
-        wr(sl, skin.Address) 
-    end) 
-    return ok
+    if defMesh and skinMesh then
+        pcall(function()
+            defMesh.TextureID = skinMesh.TextureID
+            defMesh.Color = skinMesh.Color
+            defMesh.Material = skinMesh.Material
+        end)
+        
+        for _, desc in ipairs(skinModel:GetDescendants()) do
+            if desc:IsA("BasePart") and desc.Address and desc ~= skinMesh then
+                pcall(mwr, "float", desc.Address + OFF.Transparency, 1.0)
+            end
+        end
+        return true
+    end
+    return false
 end
 
-local function swe(fn, cn, ba) 
-    if not mi then return end
-    local f = ff(mi, fn)
-    if not f then return end
-    local d, k = ff(f, ba or "Default") or ff(f, "Standard"), ff(f, cn)
-    if not d or not k then return end
-    if cn == (ba or "Default") or cn == "Standard" then return end
-    swc(f, d, k) 
-end
+-- Custom Sound Effects Callback Swapper
+task.spawn(function()
+    local pfx = function(n) return n:lower():gsub("[%s%-'%.]+", "") end
+    local AL = nil
+    for i = 1, 15 do
+        pcall(function()
+            local RS = game:GetService("ReplicatedStorage")
+            AL = RS:FindFirstChild("Modules") and RS.Modules:FindFirstChild("AnimationLibrary")
+        end)
+        if AL then break end
+        task.wait(0.5)
+    end
+    if not AL then return end
+    local SC = AL:FindFirstChild("SoundCallbacks")
+    if not SC then return end
+    
+    local abn = {}
+    for _, c in ipairs(SC:GetChildren()) do abn[c.Name] = c end
+    
+    local configFileName = "rivals_config.lua"
+    if not isfile or not readfile or not isfile(configFileName) then return end
+    local r2 = readfile(configFileName)
+    
+    for l in r2:gmatch("[^\r\n]+") do
+        local q = l:find("=")
+        if q then
+            local w = l:sub(1, q - 1):match("^%s*(.-)%s*$")
+            local s = l:sub(q + 1):match("^%s*(.-)%s*$")
+            local wp, sp = pfx(w), pfx(s)
+            local spfx = wp .. "_" .. sp .. "_"
+            for name, inst in pairs(abn) do
+                if name:sub(1, #spfx) == spfx then
+                    local di = abn[wp .. "_" .. name:sub(#spfx + 1)]
+                    if di and inst.Address and di.Address then
+                        local a = rd(di.Address + 0x8)
+                        local b = rd(inst.Address + 0x8)
+                        if a and b and a ~= b then
+                            pcall(mwr, "uintptr_t", di.Address + 0x8, b)
+                            pcall(mwr, "uintptr_t", inst.Address + 0x8, a)
+                        end
+                    end
+                end
+            end
+        end
+    end
+end)
 
-local S = {
-    Snowglobe = {SmokeClouds = "Snowglobe"}, ["Emoji Cloud"] = {SmokeClouds = "Emoji Cloud"}, Balance = {SmokeClouds = "Balance"}, Eyeball = {SmokeClouds = "Eyeball"}, Hourglass = {SmokeClouds = "Hourglass"},
-    ["Temporal Ray"] = {FreezeEffects = "Temporal"}, ["Bubble Ray"] = {FreezeEffects = "Bubble"}, ["Spider Ray"] = {FreezeEffects = "Cocoon"}, ["Wrapped Freeze Ray"] = {FreezeEffects = "Wrapped"}, ["Gum Ray"] = {FreezeEffects = "Gum"},
-    ["Pixel Flamethrower"] = {BurningEffects = "Pixel Flamethrower", FlamethrowerFlames = "Pixel Flamethrower", FlamethrowerAirblasts = "Pixel Flamethrower"},
-    ["Jack O'Thrower"] = {BurningEffects = "Jack O'Thrower", FlamethrowerFlames = "Jack O'Thrower"},
-    Keythrower = {BurningEffects = "Keythrower", FlamethrowerFlames = "Keythrower", FlamethrowerAirblasts = "Keythrower"},
-    Snowblower = {BurningEffects = "Snowblower", FlamethrowerFlames = "Snowblower"},
-    Blobsaw = {ChainsawParticles = "Chainsaw"}, Megaphone = {WarHornEffects = "Megaphone"},
-    Trampoline = {JumpPads = "Trampoline"}, ["Bounce House"] = {JumpPads = "Bounce House"}, ["Shady Chicken Sandwich"] = {JumpPads = "Shady Chicken Sandwich"}, ["Glorious Jump Pad"] = {JumpPads = "Glorious Jump Pad"}, ["Spider Web"] = {JumpPads = "Spider Web"}, ["Jolly Man"] = {JumpPads = "Jolly Man"},
-    ["Electropunk Warper"] = {Portals = "Electropunk Warper"}, ["Experiment W4"] = {Portals = "Experiment W4"}, ["Glitter Warper"] = {Portals = "Glitter Warper"}, ["Frost Warper"] = {Portals = "Frost Warper"}, ["Arcane Warper"] = {Portals = "Arcane Warper"}, ["Hotel Bell"] = {Portals = "Hotel Bell"},
-    ["Experiment D15"] = {Vortexes = "Distortion"}, ["Cyber Distortion"] = {Vortexes = "Cyber Distortion"}, Sleighstortion = {Vortexes = "Sleighstortion"}, ["Magma Distortion"] = {Vortexes = "Magma Distortion"}, ["Plasma Distortion"] = {Vortexes = "Plasma Distortion"},
-    ["Teleport Disc"] = {BlipEffects = "Teleport Disc"}, Warpeye = {BlipEffects = "Warpeye"},
-    ["Evil Trident"] = {DeflectActiveEffects = "Evil Trident", DeflectHitEffects = "Evil Trident"},
-    Saber = {DeflectHitEffects = "Saber"},
-    ["Lightning Bolt"] = {DeflectHitEffects = "Lightning Bolt"},
-    ["New Year Katana"] = {DeflectHitEffects = "New Year Katana"},
-    ["Stellar Katana"] = {DeflectActiveEffects = "Stellar Katana", DeflectHitEffects = "Stellar Katana"},
-    ["Pixel Katana"] = {DeflectActiveEffects = "Pixel Katana"},
-    ["Crystal Katana"] = {DeflectActiveEffects = "Crystal Katana", DeflectHitEffects = "Crystal Katana"},
-    ["Arch Katana"] = {DeflectActiveEffects = "Arch Katana", DeflectHitEffects = "Arch Katana"},
-    Keytana = {DeflectActiveEffects = "Keytana", DeflectHitEffects = "Keytana"},
-    Coffee = {MolotovExplosionEffects = "Coffee", BurningEffects = "Coffee", FireHitboxes = "Coffee"},
-    ["Vexed Candle"] = {MolotovExplosionEffects = "Vexed Candle", BurningEffects = "Vexed Candle", FireHitboxes = "Vexed Candle"},
-    ["Arch Molotov"] = {BurningEffects = "Arch Molotov", MolotovExplosionEffects = "Arch Molotov", FireHitboxes = "Arch Molotov"},
-    ["Lava Lamp"] = {MolotovExplosionEffects = "Lava Lamp", FireHitboxes = "Lava Lamp"},
-    ["Hot Coals"] = {FireHitboxes = "Hot Coals"},
-    Rainbowthrower = {BurningEffects = "Rainbowthrower", FlamethrowerFlames = "Rainbowthrower"},
-    Glitterthrower = {BurningEffects = "Glitterthrower", FlamethrowerFlames = "Glitterthrower"},
-    ["Electropunk Warpstone"] = {BlipEffects = "Electropunk Warpstone"},
-    Warpstar = {BlipEffects = "Warpstar"}, Warpbone = {BlipEffects = "Warpbone"}, ["Cyber Warpstone"] = {BlipEffects = "Cyber Warpstone"},
-    Extinguisher = {BurningEffects = "Extinguisher", FlamethrowerFlames = "Extinguisher"}
-}
-
-local function applySkins()
+local function applyHybrid()
     local configFileName = "rivals_config.lua"
     if not isfile or not readfile or not isfile(configFileName) then return end
     
+    local b, e = ga(wf)
+    if not b then return end
+    
     local r2 = readfile(configFileName)
-    local en = {}
+    local swappedCount = 0
+
     for l in r2:gmatch("[^\r\n]+") do 
         local q = l:find("=")
         if q then 
-            local w = l:sub(1, q - 1):match("^%s*(.-)%s*$")
-            local s = l:sub(q + 1):match("^%s*(.-)%s*$")
-            if #w > 0 and #s > 0 then en[#en + 1] = {w, s} end 
+            local weaponName = l:sub(1, q - 1):match("^%s*(.-)%s*$")
+            local skinTarget = l:sub(q + 1):match("^%s*(.-)%s*$")
+            local slotIdx = WEAPON_SLOT_INDEX[weaponName]
+            
+            if slotIdx then
+                local slotAddr = b + slotIdx * 16
+                local skinModel = nil
+                
+                if EXACT_SKIN_MAP[skinTarget] then
+                    local f = vm:FindFirstChild(EXACT_SKIN_MAP[skinTarget].folder)
+                    skinModel = f and f:FindFirstChild(EXACT_SKIN_MAP[skinTarget].name)
+                end
+                if not skinModel then
+                    for _, folder in ipairs(vm:GetChildren()) do
+                        if folder:IsA("Folder") and folder.Name ~= "Weapons" then
+                            if folder:FindFirstChild(skinTarget) then
+                                skinModel = folder:FindFirstChild(skinTarget)
+                                break
+                            end
+                        end
+                    end
+                end
+                
+                if skinModel and skinModel.Address then
+                    local defModel = wf:FindFirstChild(weaponName)
+                    
+                    if MESH_SWAP_CANDIDATES[skinTarget] and defModel then
+                        swapMeshAndTexture(defModel, skinModel)
+                        swappedCount = swappedCount + 1
+                    else
+                        cleanSkinModel(skinModel)
+                        local origSlot = rd(slotAddr)
+                        local origName = rd(skinModel.Address + OFF.NameContainer)
+                        local origParent = rd(skinModel.Address + OFF.Parent)
+                        
+                        registerRestore(slotAddr, origSlot, skinModel.Address, origName, origParent)
+                        
+                        wr(skinModel.Address + OFF.NameContainer, rd(origSlot + OFF.NameContainer))
+                        wr(skinModel.Address + OFF.Parent, wf.Address)
+                        wr(slotAddr, skinModel.Address)
+                        swappedCount = swappedCount + 1
+                    end
+                end
+            end
         end 
     end
-    if #en == 0 or not vm or not wf then return end
-
-    local sc = {}
-    for _, f in ipairs(vm:GetChildren()) do 
-        if f:IsA("Folder") and f.Name ~= "Weapons" then 
-            for _, x in ipairs(f:GetChildren()) do sc[x.Name] = x end 
-        end 
-    end
-
-    if vm:FindFirstChild("Bundles") then
-        local b = vm.Bundles
-        if b:FindFirstChild("Daggers") then sc["Crystal Daggers"] = b.Daggers end
-        if b:FindFirstChild("Gunblade") then sc["Keyblade"] = b.Gunblade end
-        if b:FindFirstChild("Shotgun") then sc["Shotkey"] = b.Shotgun end
-        if b:FindFirstChild("Satchel") then sc["Pizza Box"] = b.Satchel end
-        if b:FindFirstChild("Scythe") then sc["Mega Drill"] = b.Scythe end
-        if b:FindFirstChild("Chainsaw") then sc["Mega Drill"] = b.Chainsaw end
-        if b:FindFirstChild("Keyvolver") then sc["Keyvolver"] = b.Keyvolver end
-    end
-    if vm:FindFirstChild("Seasons") then
-        local seasons = vm.Seasons
-        if seasons:FindFirstChild("Katana") then sc["Arch Katana"] = seasons.Katana end
-        if seasons:FindFirstChild("Molotov") then sc["Arch Molotov"] = seasons.Molotov end
-        if seasons:FindFirstChild("Fists") then sc["Spy Gloves"] = seasons.Fists end
-        if seasons:FindFirstChild("Crossbow") then sc["Arch Crossbow"] = seasons.Crossbow end
-        if seasons:FindFirstChild("Arch Crossbow") then sc["Arch Crossbow"] = seasons["Arch Crossbow"] end
-        if seasons:FindFirstChild("Uzi") then sc["Arch Uzi"] = seasons.Uzi end
-        if seasons:FindFirstChild("Arch Uzi") then sc["Arch Uzi"] = seasons["Arch Uzi"] end
-    end
-    if vm:FindFirstChild("Spooky Skin Case") then
-        local spooky = vm["Spooky Skin Case"]
-        if spooky:FindFirstChild("Freeze Ray") then sc["Spider Ray"] = spooky["Freeze Ray"] end
-    end
-    if vm:FindFirstChild("Skin Case 2") then
-        local sc2 = vm["Skin Case 2"]
-        if sc2:FindFirstChild("Handgun") then sc["Hand Gun"] = sc2.Handgun end
-    end
-    if vm:FindFirstChild("Unobtainable") then
-        local un = vm.Unobtainable
-        if un:FindFirstChild("Knife") then sc["Armature.001"] = un.Knife end
-    end
-    if vm:FindFirstChild("Other") then
-        local ot = vm.Other
-        if ot:FindFirstChild("Palm Scythe") then sc["Palm Scythe"] = ot["Palm Scythe"] end
-    end
-    if vm:FindFirstChild("Festive Skin Case") then
-        local fest = vm["Festive Skin Case"]
-        if fest:FindFirstChild("Festive Fists") then sc["Festive Fists"] = fest["Festive Fists"] end
-    end
-
-    local aW = {}
-    for _, w in ipairs(wf:GetChildren()) do aW[w.Name] = w end
-
-    local count = 0
-    for _, item in ipairs(en) do
-        local weaponName = item[1]
-        local skinTarget = item[2]
-        
-        local defVm = aW[weaponName]
-        local skinVm = sc[skinTarget]
-        if defVm and skinVm then 
-            if swc(wf, defVm, skinVm) then count = count + 1 end 
-        end
-        
-        if tf then
-            local defTh = tf:FindFirstChild(weaponName)
-            local skinTh = tf:FindFirstChild(skinTarget)
-            if defTh and skinTh then swc(tf, defTh, skinTh) end
-        end
-        
-        if pf then
-            local defPr = pf:FindFirstChild(weaponName)
-            local skinPr = pf:FindFirstChild(skinTarget)
-            if defPr and skinPr then swc(pf, defPr, skinPr) end
-        end
-        
-        if S[skinTarget] and mi then
-            for effectCategory, effectName in pairs(S[skinTarget]) do swe(effectCategory, effectName) end
-        end
-    end
-    
-    for _, w in ipairs(wf:GetChildren()) do cleanSkinModel(w) end
-    print("All skins applied cleanly! Swapped:", count)
+    print("Hybrid Master Swapper: Successfully swapped " .. swappedCount .. " weapons!")
 end
 
-applySkins()
-pcall(notify, "Arch Crossbow wings fixed & active!", "SC", 4)
+applyHybrid()
+pcall(notify, "Hybrid Master Swapper Active!", "SC", 4)
 
 local TS = game:GetService("TeleportService")
 if TS then
