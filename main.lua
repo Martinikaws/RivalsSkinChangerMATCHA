@@ -1,5 +1,5 @@
 -- =========================================================================
---  RIVALS 100% TELEPORT & QUEUE-SAFE SKIN SWAPPER
+--  RIVALS MEMORY SKIN SWAPPER (Crash-Proof with Teleport Memory Restoration)
 -- =========================================================================
 
 if not pcall(memory_read, "int", game.Address) then 
@@ -23,14 +23,20 @@ local LP = game:GetService("Players").LocalPlayer
 if not LP or game.GameId ~= 6035872082 then return end
 
 local OFF = {
-    Parent = 104,
-    Children = 120,
-    Transparency = 304
+    Parent = 104,          -- 0x68
+    NameContainer = 112,   -- 0x70
+    Children = 120,        -- 0x78
+    Transparency = 304     -- BasePart.Transparency
 }
 
 local A = LP.PlayerScripts:WaitForChild("Assets", 10)
 local vm = A and A:WaitForChild("ViewModels", 10)
 local wf = vm and vm:WaitForChild("Weapons", 10)
+local tf = A and A:FindFirstChild("Throwables")
+local pf = A and A:FindFirstChild("Projectiles")
+local mi = A and A:FindFirstChild("Misc")
+
+local ff = function(p, n) return p and p:FindFirstChild(n) end
 
 local ga = function(f) 
     if not f or not f.Address then return end
@@ -48,6 +54,29 @@ local fs = function(b, e, t)
     end 
 end
 
+-- Track all pointer swaps for 100% clean restoration before place teleport
+local memoryRestores = {}
+
+local function registerRestore(slotAddr, origSlot, skinAddr, origName, origParent)
+    table.insert(memoryRestores, {
+        slot = slotAddr,
+        origSlot = origSlot,
+        skin = skinAddr,
+        origName = origName,
+        origParent = origParent
+    })
+end
+
+local function restoreAllMemory()
+    for _, r in ipairs(memoryRestores) do
+        pcall(mwr, "uintptr_t", r.slot, r.origSlot)
+        pcall(mwr, "uintptr_t", r.skin + OFF.NameContainer, r.origName)
+        pcall(mwr, "uintptr_t", r.skin + OFF.Parent, r.origParent)
+    end
+    memoryRestores = {}
+end
+
+-- Hide visual clutter (spider legs, loose shells, giant wings)
 local function hideClutter(m)
     if not m then return end
     for _, c in ipairs(m:GetChildren()) do
@@ -62,7 +91,8 @@ local function hideClutter(m)
     end
 end
 
-local function safeSwap(parent, default, skin) 
+-- Swapper with automatic original pointer tracking
+local function swc(parent, default, skin) 
     if not parent or not default or not skin then return false end
     if default == skin then return false end
     local b, e = ga(parent)
@@ -72,11 +102,63 @@ local function safeSwap(parent, default, skin)
     
     hideClutter(skin)
     
+    local origSlot = rd(sl)
+    local origName = rd(skin.Address + OFF.NameContainer)
+    local origParent = rd(skin.Address + OFF.Parent)
+    
+    registerRestore(sl, origSlot, skin.Address, origName, origParent)
+    
+    wr(skin.Address + OFF.NameContainer, rd(default.Address + OFF.NameContainer))
+    wr(skin.Address + OFF.Parent, parent.Address)
+    
     local ok = pcall(function() 
         wr(sl, skin.Address) 
     end) 
     return ok
 end
+
+local function swe(fn, cn, ba) 
+    if not mi then return end
+    local f = ff(mi, fn)
+    if not f then return end
+    local d, k = ff(f, ba or "Default") or ff(f, "Standard"), ff(f, cn)
+    if not d or not k then return end
+    if cn == (ba or "Default") or cn == "Standard" then return end
+    swc(f, d, k) 
+end
+
+local S = {
+    Snowglobe = {SmokeClouds = "Snowglobe"}, ["Emoji Cloud"] = {SmokeClouds = "Emoji Cloud"}, Balance = {SmokeClouds = "Balance"}, Eyeball = {SmokeClouds = "Eyeball"}, Hourglass = {SmokeClouds = "Hourglass"},
+    ["Temporal Ray"] = {FreezeEffects = "Temporal"}, ["Bubble Ray"] = {FreezeEffects = "Bubble"}, ["Spider Ray"] = {FreezeEffects = "Cocoon"}, ["Wrapped Freeze Ray"] = {FreezeEffects = "Wrapped"}, ["Gum Ray"] = {FreezeEffects = "Gum"},
+    ["Pixel Flamethrower"] = {BurningEffects = "Pixel Flamethrower", FlamethrowerFlames = "Pixel Flamethrower", FlamethrowerAirblasts = "Pixel Flamethrower"},
+    ["Jack O'Thrower"] = {BurningEffects = "Jack O'Thrower", FlamethrowerFlames = "Jack O'Thrower"},
+    Keythrower = {BurningEffects = "Keythrower", FlamethrowerFlames = "Keythrower", FlamethrowerAirblasts = "Keythrower"},
+    Snowblower = {BurningEffects = "Snowblower", FlamethrowerFlames = "Snowblower"},
+    Blobsaw = {ChainsawParticles = "Chainsaw"}, Megaphone = {WarHornEffects = "Megaphone"},
+    Trampoline = {JumpPads = "Trampoline"}, ["Bounce House"] = {JumpPads = "Bounce House"}, ["Shady Chicken Sandwich"] = {JumpPads = "Shady Chicken Sandwich"}, ["Glorious Jump Pad"] = {JumpPads = "Glorious Jump Pad"}, ["Spider Web"] = {JumpPads = "Spider Web"}, ["Jolly Man"] = {JumpPads = "Jolly Man"},
+    ["Electropunk Warper"] = {Portals = "Electropunk Warper"}, ["Experiment W4"] = {Portals = "Experiment W4"}, ["Glitter Warper"] = {Portals = "Glitter Warper"}, ["Frost Warper"] = {Portals = "Frost Warper"}, ["Arcane Warper"] = {Portals = "Arcane Warper"}, ["Hotel Bell"] = {Portals = "Hotel Bell"},
+    ["Experiment D15"] = {Vortexes = "Distortion"}, ["Cyber Distortion"] = {Vortexes = "Cyber Distortion"}, Sleighstortion = {Vortexes = "Sleighstortion"}, ["Magma Distortion"] = {Vortexes = "Magma Distortion"}, ["Plasma Distortion"] = {Vortexes = "Plasma Distortion"},
+    ["Teleport Disc"] = {BlipEffects = "Teleport Disc"}, Warpeye = {BlipEffects = "Warpeye"},
+    ["Evil Trident"] = {DeflectActiveEffects = "Evil Trident", DeflectHitEffects = "Evil Trident"},
+    Saber = {DeflectHitEffects = "Saber"},
+    ["Lightning Bolt"] = {DeflectHitEffects = "Lightning Bolt"},
+    ["New Year Katana"] = {DeflectHitEffects = "New Year Katana"},
+    ["Stellar Katana"] = {DeflectActiveEffects = "Stellar Katana", DeflectHitEffects = "Stellar Katana"},
+    ["Pixel Katana"] = {DeflectActiveEffects = "Pixel Katana"},
+    ["Crystal Katana"] = {DeflectActiveEffects = "Crystal Katana", DeflectHitEffects = "Crystal Katana"},
+    ["Arch Katana"] = {DeflectActiveEffects = "Arch Katana", DeflectHitEffects = "Arch Katana"},
+    Keytana = {DeflectActiveEffects = "Keytana", DeflectHitEffects = "Keytana"},
+    Coffee = {MolotovExplosionEffects = "Coffee", BurningEffects = "Coffee", FireHitboxes = "Coffee"},
+    ["Vexed Candle"] = {MolotovExplosionEffects = "Vexed Candle", BurningEffects = "Vexed Candle", FireHitboxes = "Vexed Candle"},
+    ["Arch Molotov"] = {BurningEffects = "Arch Molotov", MolotovExplosionEffects = "Arch Molotov", FireHitboxes = "Arch Molotov"},
+    ["Lava Lamp"] = {MolotovExplosionEffects = "Lava Lamp", FireHitboxes = "Lava Lamp"},
+    ["Hot Coals"] = {FireHitboxes = "Hot Coals"},
+    Rainbowthrower = {BurningEffects = "Rainbowthrower", FlamethrowerFlames = "Rainbowthrower"},
+    Glitterthrower = {BurningEffects = "Glitterthrower", FlamethrowerFlames = "Glitterthrower"},
+    ["Electropunk Warpstone"] = {BlipEffects = "Electropunk Warpstone"},
+    Warpstar = {BlipEffects = "Warpstar"}, Warpbone = {BlipEffects = "Warpbone"}, ["Cyber Warpstone"] = {BlipEffects = "Cyber Warpstone"},
+    Extinguisher = {BurningEffects = "Extinguisher", FlamethrowerFlames = "Extinguisher"}
+}
 
 local function applySkins()
     local configFileName = "rivals_config.lua"
@@ -129,13 +211,46 @@ local function applySkins()
         local defVm = aW[weaponName]
         local skinVm = sc[skinTarget]
         if defVm and skinVm then 
-            if safeSwap(wf, defVm, skinVm) then count = count + 1 end 
+            if swc(wf, defVm, skinVm) then count = count + 1 end 
+        end
+        
+        if tf then
+            local defTh = tf:FindFirstChild(weaponName)
+            local skinTh = tf:FindFirstChild(skinTarget)
+            if defTh and skinTh then swc(tf, defTh, skinTh) end
+        end
+        
+        if pf then
+            local defPr = pf:FindFirstChild(weaponName)
+            local skinPr = pf:FindFirstChild(skinTarget)
+            if defPr and skinPr then swc(pf, defPr, skinPr) end
+        end
+        
+        if S[skinTarget] and mi then
+            for effectCategory, effectName in pairs(S[skinTarget]) do swe(effectCategory, effectName) end
         end
     end
     
     for _, w in ipairs(wf:GetChildren()) do hideClutter(w) end
-    print("Teleport-Safe Skins Applied! Swapped count:", count)
+    print("Skins active with zero-crash teleport protection! Swapped:", count)
 end
 
+-- Apply skins now
 applySkins()
-pcall(notify, "Teleport & Queue Safe Skins Active!", "SC", 4)
+pcall(notify, "Rivals skins active! (Teleport & Match Safe)", "SC", 4)
+
+-- 🛡️ TELEPORT CLEANUP: Automatically restores pointers when queueing into a match
+local TS = game:GetService("TeleportService")
+if TS then
+    pcall(function()
+        TS.TeleportInit:Connect(function()
+            restoreAllMemory()
+        end)
+    end)
+end
+
+pcall(function()
+    game:BindToClose(function()
+        restoreAllMemory()
+    end)
+end)
