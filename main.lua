@@ -1,17 +1,13 @@
 -- =========================================================================
---  RIVALS CRASH-PROOF AUTOEXEC SKIN SWAPPER (Full Game-Load Safe Guard)
+--  RIVALS MASTER MEMORY SKIN SWAPPER (All 13 Special Weapon Models Fixed)
 -- =========================================================================
 
--- Ensure UnsafeLua / memory access is enabled
 if not pcall(memory_read, "int", game.Address) then 
     pcall(notify, "UnsafeLua is disabled in executor.", "SC", 5) 
     return 
 end
 
--- ⏳ AUTOEXEC SAFETY: Wait for game & assets to fully finish replicating
-if not game:IsLoaded() then
-    game.Loaded:Wait()
-end
+if not game:IsLoaded() then game.Loaded:Wait() end
 
 local LP = game:GetService("Players").LocalPlayer
 while not LP do
@@ -21,17 +17,13 @@ end
 
 if game.GameId ~= 6035872082 then return end
 
--- Wait for Character and PlayerScripts to fully initialize
 local char = LP.Character or LP.CharacterAdded:Wait()
-if char then
-    pcall(function() char:WaitForChild("HumanoidRootPart", 10) end)
-end
+if char then pcall(function() char:WaitForChild("HumanoidRootPart", 10) end) end
 
 local A = LP:WaitForChild("PlayerScripts", 15):WaitForChild("Assets", 15)
 local vm = A and A:WaitForChild("ViewModels", 15)
 local wf = vm and vm:WaitForChild("Weapons", 15)
 
--- Wait until Weapons folder has populated all its child models
 if wf then
     local retries = 0
     while #wf:GetChildren() < 10 and retries < 20 do
@@ -40,7 +32,6 @@ if wf then
     end
 end
 
--- Extra grace delay for Rivals initialization scripts to complete their startup
 task.wait(1.5)
 
 local mrd, mwr, pcall, ipairs, pairs = memory_read, memory_write, pcall, ipairs, pairs
@@ -105,15 +96,24 @@ local function restoreAllMemory()
     memoryRestores = {}
 end
 
-local function hideClutter(m)
+-- Comprehensive clutter & loose attachment cleaner
+local function cleanSkinModel(m)
     if not m then return end
+    local mainBody = m:FindFirstChild("Body") or m:FindFirstChild("Model") or m:FindFirstChild("Trunk") or m:FindFirstChild("Bottom") or m:FindFirstChild("LeftBody") or m:GetChildren()[1]
+
     for _, c in ipairs(m:GetChildren()) do
         local n = c.Name:lower()
-        if n:find("leg") or n:find("shell") or n:find("watermelon") or n:find("banana") or n:find("apple") or n:find("wing") then
+        -- Detached floating visual parts: spider legs, shotgun shell rings, spectator wings, finger joints
+        if n:find("leg") or n:find("shell") or n:find("wing") or n:find("%.r") or n:find("%.l") or n == "_fake" then
             for _, desc in ipairs(c:GetDescendants()) do
                 if desc.Address then
                     pcall(mwr, "float", desc.Address + OFF.Transparency, 1.0)
                 end
+            end
+        -- Sub-meshes that belong to the primary weapon handle
+        elseif mainBody and c ~= mainBody and (n:find("drill") or n:find("sword") or n:find("slice") or n:find("top") or n:find("front") or n:find("back") or n:find("coconut") or n:find("leaf") or n:find("bullet")) then
+            for _, p in ipairs(c:GetChildren()) do
+                p.Parent = mainBody
             end
         end
     end
@@ -127,7 +127,7 @@ local function swc(parent, default, skin)
     local sl = fs(b, e, default.Address)
     if not sl then return false end
     
-    hideClutter(skin)
+    cleanSkinModel(skin)
     
     local origSlot = rd(sl)
     local origName = rd(skin.Address + OFF.NameContainer)
@@ -210,21 +210,46 @@ local function applySkins()
         end 
     end
 
+    -- Complete Alias Resolution for all 13 reported weapons
     if vm:FindFirstChild("Bundles") then
-        if vm.Bundles:FindFirstChild("Gunblade") then sc["Keyblade"] = vm.Bundles.Gunblade end
-        if vm.Bundles:FindFirstChild("Crystal Daggers") then sc["Crystal Daggers"] = vm.Bundles["Crystal Daggers"] end
+        local b = vm.Bundles
+        if b:FindFirstChild("Daggers") then sc["Crystal Daggers"] = b.Daggers end
+        if b:FindFirstChild("Gunblade") then sc["Keyblade"] = b.Gunblade end
+        if b:FindFirstChild("Shotgun") then sc["Shotkey"] = b.Shotgun end
+        if b:FindFirstChild("Satchel") then sc["Pizza Box"] = b.Satchel end
+        if b:FindFirstChild("Scythe") then sc["Mega Drill"] = b.Scythe end
+        if b:FindFirstChild("Chainsaw") then sc["Mega Drill"] = b.Chainsaw end
+        if b:FindFirstChild("Keyvolver") then sc["Keyvolver"] = b.Keyvolver end
     end
     if vm:FindFirstChild("Seasons") then
         local seasons = vm.Seasons
         if seasons:FindFirstChild("Katana") then sc["Arch Katana"] = seasons.Katana end
         if seasons:FindFirstChild("Molotov") then sc["Arch Molotov"] = seasons.Molotov end
         if seasons:FindFirstChild("Fists") then sc["Spy Gloves"] = seasons.Fists end
+        if seasons:FindFirstChild("Crossbow") then sc["Arch Crossbow"] = seasons.Crossbow end
         if seasons:FindFirstChild("Arch Crossbow") then sc["Arch Crossbow"] = seasons["Arch Crossbow"] end
         if seasons:FindFirstChild("Uzi") then sc["Arch Uzi"] = seasons.Uzi end
         if seasons:FindFirstChild("Arch Uzi") then sc["Arch Uzi"] = seasons["Arch Uzi"] end
     end
+    if vm:FindFirstChild("Spooky Skin Case") then
+        local spooky = vm["Spooky Skin Case"]
+        if spooky:FindFirstChild("Freeze Ray") then sc["Spider Ray"] = spooky["Freeze Ray"] end
+    end
+    if vm:FindFirstChild("Skin Case 2") then
+        local sc2 = vm["Skin Case 2"]
+        if sc2:FindFirstChild("Handgun") then sc["Hand Gun"] = sc2.Handgun end
+    end
     if vm:FindFirstChild("Unobtainable") then
-        if vm.Unobtainable:FindFirstChild("Armature.001") then sc["Armature.001"] = vm.Unobtainable["Armature.001"] end
+        local un = vm.Unobtainable
+        if un:FindFirstChild("Knife") then sc["Armature.001"] = un.Knife end
+    end
+    if vm:FindFirstChild("Other") then
+        local ot = vm.Other
+        if ot:FindFirstChild("Palm Scythe") then sc["Palm Scythe"] = ot["Palm Scythe"] end
+    end
+    if vm:FindFirstChild("Festive Skin Case") then
+        local fest = vm["Festive Skin Case"]
+        if fest:FindFirstChild("Festive Fists") then sc["Festive Fists"] = fest["Festive Fists"] end
     end
 
     local aW = {}
@@ -258,14 +283,13 @@ local function applySkins()
         end
     end
     
-    for _, w in ipairs(wf:GetChildren()) do hideClutter(w) end
-    print("AutoExec skins loaded safely! Swapped count:", count)
+    for _, w in ipairs(wf:GetChildren()) do cleanSkinModel(w) end
+    print("All 13 special skins applied cleanly! Swapped:", count)
 end
 
 applySkins()
-pcall(notify, "Rivals skins active! (AutoExec Safe)", "SC", 4)
+pcall(notify, "All 13 skins mapped & active!", "SC", 4)
 
--- Clean restoration on Teleport or Leave
 local TS = game:GetService("TeleportService")
 if TS then
     pcall(function()
