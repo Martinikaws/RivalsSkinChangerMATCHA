@@ -1,5 +1,5 @@
 -- =========================================================================
---  RIVALS MASTER MEMORY SKIN SWAPPER (All 13 Special Weapon Models Fixed)
+--  RIVALS MASTER MEMORY SKIN SWAPPER (Arch Crossbow Wings & Rig Fixed)
 -- =========================================================================
 
 if not pcall(memory_read, "int", game.Address) then 
@@ -100,14 +100,22 @@ end
 local function cleanSkinModel(m)
     if not m then return end
     local mainBody = m:FindFirstChild("Body") or m:FindFirstChild("Model") or m:FindFirstChild("Trunk") or m:FindFirstChild("Bottom") or m:FindFirstChild("LeftBody") or m:GetChildren()[1]
+    local isCrossbow = m.Name:lower():find("crossbow")
 
     for _, c in ipairs(m:GetChildren()) do
         local n = c.Name:lower()
-        -- Detached floating visual parts: spider legs, shotgun shell rings, spectator wings, finger joints
-        if n:find("leg") or n:find("shell") or n:find("wing") or n:find("%.r") or n:find("%.l") or n == "_fake" then
+        -- Detached floating visual parts (never hide wings on Arch Crossbow!)
+        if n:find("leg") or n:find("shell") or n:find("%.r") or n:find("%.l") or n == "_fake" or (n:find("wing") and not isCrossbow) then
             for _, desc in ipairs(c:GetDescendants()) do
                 if desc.Address then
                     pcall(mwr, "float", desc.Address + OFF.Transparency, 1.0)
+                end
+            end
+        -- Ensure Arch Crossbow Wings remain 100% visible and glowing
+        elseif isCrossbow and n:find("wing") then
+            for _, desc in ipairs(c:GetDescendants()) do
+                if desc.Address and desc:IsA("BasePart") and desc.Name ~= "Primary" then
+                    pcall(mwr, "float", desc.Address + OFF.Transparency, 0.0)
                 end
             end
         -- Sub-meshes that belong to the primary weapon handle
@@ -210,7 +218,6 @@ local function applySkins()
         end 
     end
 
-    -- Complete Alias Resolution for all 13 reported weapons
     if vm:FindFirstChild("Bundles") then
         local b = vm.Bundles
         if b:FindFirstChild("Daggers") then sc["Crystal Daggers"] = b.Daggers end
@@ -284,11 +291,11 @@ local function applySkins()
     end
     
     for _, w in ipairs(wf:GetChildren()) do cleanSkinModel(w) end
-    print("All 13 special skins applied cleanly! Swapped:", count)
+    print("All skins applied cleanly! Swapped:", count)
 end
 
 applySkins()
-pcall(notify, "All 13 skins mapped & active!", "SC", 4)
+pcall(notify, "Arch Crossbow wings fixed & active!", "SC", 4)
 
 local TS = game:GetService("TeleportService")
 if TS then
