@@ -1,11 +1,47 @@
 -- =========================================================================
---  RIVALS MEMORY SKIN SWAPPER (Crash-Proof with Teleport Memory Restoration)
+--  RIVALS CRASH-PROOF AUTOEXEC SKIN SWAPPER (Full Game-Load Safe Guard)
 -- =========================================================================
 
+-- Ensure UnsafeLua / memory access is enabled
 if not pcall(memory_read, "int", game.Address) then 
     pcall(notify, "UnsafeLua is disabled in executor.", "SC", 5) 
     return 
 end
+
+-- ⏳ AUTOEXEC SAFETY: Wait for game & assets to fully finish replicating
+if not game:IsLoaded() then
+    game.Loaded:Wait()
+end
+
+local LP = game:GetService("Players").LocalPlayer
+while not LP do
+    task.wait(0.5)
+    LP = game:GetService("Players").LocalPlayer
+end
+
+if game.GameId ~= 6035872082 then return end
+
+-- Wait for Character and PlayerScripts to fully initialize
+local char = LP.Character or LP.CharacterAdded:Wait()
+if char then
+    pcall(function() char:WaitForChild("HumanoidRootPart", 10) end)
+end
+
+local A = LP:WaitForChild("PlayerScripts", 15):WaitForChild("Assets", 15)
+local vm = A and A:WaitForChild("ViewModels", 15)
+local wf = vm and vm:WaitForChild("Weapons", 15)
+
+-- Wait until Weapons folder has populated all its child models
+if wf then
+    local retries = 0
+    while #wf:GetChildren() < 10 and retries < 20 do
+        task.wait(0.2)
+        retries = retries + 1
+    end
+end
+
+-- Extra grace delay for Rivals initialization scripts to complete their startup
+task.wait(1.5)
 
 local mrd, mwr, pcall, ipairs, pairs = memory_read, memory_write, pcall, ipairs, pairs
 local floor = math.floor
@@ -19,9 +55,6 @@ local wr = function(a, v)
     pcall(mwr, "uintptr_t", a, v) 
 end
 
-local LP = game:GetService("Players").LocalPlayer
-if not LP or game.GameId ~= 6035872082 then return end
-
 local OFF = {
     Parent = 104,          -- 0x68
     NameContainer = 112,   -- 0x70
@@ -29,9 +62,6 @@ local OFF = {
     Transparency = 304     -- BasePart.Transparency
 }
 
-local A = LP.PlayerScripts:WaitForChild("Assets", 10)
-local vm = A and A:WaitForChild("ViewModels", 10)
-local wf = vm and vm:WaitForChild("Weapons", 10)
 local tf = A and A:FindFirstChild("Throwables")
 local pf = A and A:FindFirstChild("Projectiles")
 local mi = A and A:FindFirstChild("Misc")
@@ -54,7 +84,6 @@ local fs = function(b, e, t)
     end 
 end
 
--- Track all pointer swaps for 100% clean restoration before place teleport
 local memoryRestores = {}
 
 local function registerRestore(slotAddr, origSlot, skinAddr, origName, origParent)
@@ -76,7 +105,6 @@ local function restoreAllMemory()
     memoryRestores = {}
 end
 
--- Hide visual clutter (spider legs, loose shells, giant wings)
 local function hideClutter(m)
     if not m then return end
     for _, c in ipairs(m:GetChildren()) do
@@ -91,7 +119,6 @@ local function hideClutter(m)
     end
 end
 
--- Swapper with automatic original pointer tracking
 local function swc(parent, default, skin) 
     if not parent or not default or not skin then return false end
     if default == skin then return false end
@@ -232,14 +259,13 @@ local function applySkins()
     end
     
     for _, w in ipairs(wf:GetChildren()) do hideClutter(w) end
-    print("Skins active with zero-crash teleport protection! Swapped:", count)
+    print("AutoExec skins loaded safely! Swapped count:", count)
 end
 
--- Apply skins now
 applySkins()
-pcall(notify, "Rivals skins active! (Teleport & Match Safe)", "SC", 4)
+pcall(notify, "Rivals skins active! (AutoExec Safe)", "SC", 4)
 
--- 🛡️ TELEPORT CLEANUP: Automatically restores pointers when queueing into a match
+-- Clean restoration on Teleport or Leave
 local TS = game:GetService("TeleportService")
 if TS then
     pcall(function()
