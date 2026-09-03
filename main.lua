@@ -61,8 +61,9 @@ local ga = function(f)
 end
 
 -- Dynamic weapon slot resolution in memory vector
-local function findSlotAddressForWeapon(weaponModel)
-    local b, e = ga(wf)
+local function findSlotAddressForWeapon(weaponModel, targetFolder)
+    local f = targetFolder or wf
+    local b, e = ga(f)
     if not b or not e then return nil end
     for slotAddr = b, e - 16, 16 do
         if rd(slotAddr) == weaponModel.Address then
@@ -389,11 +390,15 @@ EXACT_SKIN_MAP["Harpoon"] = {folder = "Summer Skin Case", name = "Broken Surfboa
 -- Memory restore registration
 local memoryRestores = {}
 
-local function registerRestore(slotAddr, origSlot, skinAddr, origSkinNC)
+local function registerRestore(defSlot, origDefSlot, defAddr, origDefNC, skinSlot, origSkinSlot, skinAddr, origSkinNC)
     table.insert(memoryRestores, {
-        slot = slotAddr,
-        origSlot = origSlot,
-        skin = skinAddr,
+        defSlot = defSlot,
+        origDefSlot = origDefSlot,
+        defAddr = defAddr,
+        origDefNC = origDefNC,
+        skinSlot = skinSlot,
+        origSkinSlot = origSkinSlot,
+        skinAddr = skinAddr,
         origSkinNC = origSkinNC
     })
 end
@@ -401,8 +406,10 @@ end
 -- Revert pointers on place change to prevent engine crashes
 local function restoreAllMemory()
     for _, r in ipairs(memoryRestores) do
-        pcall(mwr, "uintptr_t", r.slot, r.origSlot)
-        pcall(mwr, "uintptr_t", r.skin + OFF.NameContainer, r.origSkinNC)
+        if r.defSlot and r.origDefSlot then pcall(mwr, "uintptr_t", r.defSlot, r.origDefSlot) end
+        if r.skinSlot and r.origSkinSlot then pcall(mwr, "uintptr_t", r.skinSlot, r.origSkinSlot) end
+        if r.defAddr and r.origDefNC then pcall(mwr, "uintptr_t", r.defAddr + OFF.NameContainer, r.origDefNC) end
+        if r.skinAddr and r.origSkinNC then pcall(mwr, "uintptr_t", r.skinAddr + OFF.NameContainer, r.origSkinNC) end
     end
     memoryRestores = {}
 end
@@ -603,8 +610,10 @@ local function applySkinSwapper()
             local skinModel = findSkinModel(skinTarget)
             
             if defModel and skinModel and defModel.Address and skinModel.Address then
-                local slotAddr = findSlotAddressForWeapon(defModel)
-                if slotAddr then
+                local defSlot = findSlotAddressForWeapon(defModel, wf)
+                local skinSlot = findSlotAddressForWeapon(skinModel, skinModel.Parent)
+                
+                if defSlot then
                     rigSkinModel(skinModel)
                     if weaponName == "Crossbow" or skinTarget:find("Crossbow") or skinTarget:find("Bow") then
                         pcall(fixArrowRig, skinModel)
@@ -612,14 +621,24 @@ local function applySkinSwapper()
                         pcall(fixDaggersRig, skinModel)
                     end
                     
-                    local origSlot = rd(slotAddr)
+                    local origDefSlot = rd(defSlot)
+                    local origSkinSlot = skinSlot and rd(skinSlot) or nil
+                    local origDefNC = rd(defModel.Address + OFF.NameContainer)
                     local origSkinNC = rd(skinModel.Address + OFF.NameContainer)
-                    local defNC = rd(defModel.Address + OFF.NameContainer)
                     
-                    registerRestore(slotAddr, origSlot, skinModel.Address, origSkinNC)
+                    registerRestore(defSlot, origDefSlot, defModel.Address, origDefNC, skinSlot, origSkinSlot, skinModel.Address, origSkinNC)
                     
-                    wr(skinModel.Address + OFF.NameContainer, defNC)
-                    wr(slotAddr, skinModel.Address)
+                    -- Two-Way pointer swap (Weapons gets skinModel, case folder gets defModel)
+                    wr(defSlot, skinModel.Address)
+                    if skinSlot then
+                        wr(skinSlot, defModel.Address)
+                    end
+                    
+                    -- Two-Way name swap (skinModel named as weapon, defModel named as skin)
+                    wr(skinModel.Address + OFF.NameContainer, origDefNC)
+                    if skinSlot then
+                        wr(defModel.Address + OFF.NameContainer, origSkinNC)
+                    end
                     
                     if VM_MODULE_FAMILIES[weaponName] then
                         pcall(swapViewModelModule, VM_MODULE_FAMILIES[weaponName], weaponName, skinTarget)
