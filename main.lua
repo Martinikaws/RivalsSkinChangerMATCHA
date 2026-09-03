@@ -590,44 +590,6 @@ end
 applySkinSwapper()
 pcall(notify, "Updated to v1.2", "SC", 4)
 
--- Locker UI unlocker to reveal all skins in the customize menu
-task.spawn(function()
-    while true do
-        task.wait(0.5)
-        local pg = LP:FindFirstChild("PlayerGui")
-        local mg = pg and pg:FindFirstChild("MainGui")
-        local mf = mg and mg:FindFirstChild("MainFrame")
-        local eq = mf and mf:FindFirstChild("Equipment")
-        local cust = eq and eq:FindFirstChild("Customize")
-        local bottom = cust and cust:FindFirstChild("Bottom")
-        local container = bottom and bottom:FindFirstChild("Container")
-        local list = container and container:FindFirstChild("List")
-        local slotContainer = list and list:FindFirstChild("Container")
-        
-        if slotContainer then
-            for _, slot in ipairs(slotContainer:GetChildren()) do
-                if slot:IsA("GuiObject") then
-                    local button = slot:FindFirstChild("Button", true)
-                    if button then
-                        local locked = button:FindFirstChild("Locked")
-                        if locked then pcall(function() locked.Visible = false end) end
-                        local icon = button:FindFirstChild("Icon")
-                        if icon then
-                            pcall(function()
-                                icon.ImageTransparency = 0
-                                icon.ImageColor3 = Color3.fromRGB(255, 255, 255)
-                            end)
-                        end
-                        local title = button:FindFirstChild("Title")
-                        if title then pcall(function() title.TextTransparency = 0 end) end
-                        pcall(function() button.Interactable = true end)
-                    end
-                end
-            end
-        end
-    end
-end)
-
 -- Clean up memory on place teardown or disconnect
 if wf then
     pcall(function()
