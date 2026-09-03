@@ -506,21 +506,6 @@ local function rigSkinModel(m)
             else
                 pcall(function() sub.PrimaryPart = sub.Primary end)
             end
-            
-            -- Auto-weld all child parts inside the submodel to its Primary part
-            local prim = sub:FindFirstChild("Primary") or sub.PrimaryPart
-            if prim then
-                for _, part in ipairs(sub:GetChildren()) do
-                    if part:IsA("BasePart") and part ~= prim then
-                        if not part:FindFirstChildWhichIsA("WeldConstraint") then
-                            local weld = Instance.new("WeldConstraint")
-                            weld.Part0 = prim
-                            weld.Part1 = part
-                            weld.Parent = prim
-                        end
-                    end
-                end
-            end
         end
     end
     
