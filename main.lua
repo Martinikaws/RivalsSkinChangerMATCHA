@@ -389,12 +389,12 @@ EXACT_SKIN_MAP["Harpoon"] = {folder = "Summer Skin Case", name = "Broken Surfboa
 -- Memory restore registration
 local memoryRestores = {}
 
-local function registerRestore(slotAddr, origSlot, skinAddr, origSkinName)
+local function registerRestore(slotAddr, origSlot, skinAddr, origSkinNC)
     table.insert(memoryRestores, {
         slot = slotAddr,
         origSlot = origSlot,
         skin = skinAddr,
-        origSkinName = origSkinName
+        origSkinNC = origSkinNC
     })
 end
 
@@ -402,10 +402,7 @@ end
 local function restoreAllMemory()
     for _, r in ipairs(memoryRestores) do
         pcall(mwr, "uintptr_t", r.slot, r.origSlot)
-        local skinNC = rd(r.skin + OFF.NameContainer)
-        if skinNC and r.origSkinName then
-            pcall(mwr, "string", skinNC + 8, r.origSkinName .. "\0")
-        end
+        pcall(mwr, "uintptr_t", r.skin + OFF.NameContainer, r.origSkinNC)
     end
     memoryRestores = {}
 end
@@ -573,14 +570,12 @@ local function applySkinSwapper()
                     rigSkinModel(skinModel)
                     
                     local origSlot = rd(slotAddr)
-                    local origSkinName = skinModel.Name
+                    local origSkinNC = rd(skinModel.Address + OFF.NameContainer)
+                    local defNC = rd(defModel.Address + OFF.NameContainer)
                     
-                    local skinNC = rd(skinModel.Address + OFF.NameContainer)
-                    if skinNC then
-                        pcall(mwr, "string", skinNC + 8, weaponName .. "\0")
-                    end
+                    registerRestore(slotAddr, origSlot, skinModel.Address, origSkinNC)
                     
-                    registerRestore(slotAddr, origSlot, skinModel.Address, origSkinName)
+                    wr(skinModel.Address + OFF.NameContainer, defNC)
                     wr(slotAddr, skinModel.Address)
                     
                     swappedCount = swappedCount + 1
