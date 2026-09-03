@@ -91,7 +91,6 @@ local EXACT_SKIN_MAP = {
     ["Caladbolg"] = {folder = "Bundles", name = "Caladbolg"},
     ["Cutlass"] = {folder = "Bundles", name = "Cutlass"},
     ["Riptide Katana"] = {folder = "Bundles", name = "Riptide Katana"},
-
     ["Blaster"] = {folder = "Skin Case", name = "Handgun"},
     ["Advanced Satchel"] = {folder = "Skin Case", name = "Satchel"},
     ["Boomstick"] = {folder = "Skin Case", name = "Shotgun"},
@@ -128,7 +127,6 @@ local EXACT_SKIN_MAP = {
     ["Plasma Distortion"] = {folder = "Skin Case", name = "Plasma Distortion"},
     ["Glitter Warper"] = {folder = "Skin Case", name = "Glitter Warper"},
     ["Trumpet"] = {folder = "Skin Case", name = "Trumpet"},
-
     ["Camera"] = {folder = "Skin Case 2", name = "Flashbang"},
     ["Balance"] = {folder = "Skin Case 2", name = "Smoke Grenade"},
     ["Garden Shovel"] = {folder = "Skin Case 2", name = "Trowel"},
@@ -169,7 +167,6 @@ local EXACT_SKIN_MAP = {
     ["Harpoon Crossbow"] = {folder = "Skin Case 2", name = "Harpoon Crossbow"},
     ["Handsaws"] = {folder = "Skin Case 2", name = "Handsaws"},
     ["Hand Gun"] = {folder = "Skin Case 2", name = "Hand Gun"},
-
     ["Balisong"] = {folder = "Skin Case 3", name = "Knife"},
     ["DIY Tripmine"] = {folder = "Skin Case 3", name = "Subspace Tripmine"},
     ["Air Horn"] = {folder = "Skin Case 3", name = "War Horn"},
@@ -197,7 +194,6 @@ local EXACT_SKIN_MAP = {
     ["Cyber Distortion"] = {folder = "Skin Case 3", name = "Cyber Distortion"},
     ["Void Rifle"] = {folder = "Skin Case 3", name = "Void Rifle"},
     ["Fists of Hurt"] = {folder = "Skin Case 3", name = "Fists of Hurt"},
-
     ["Boneclaw Revolver"] = {folder = "Spooky Skin Case", name = "Revolver"},
     ["Boneclaw Spray"] = {folder = "Spooky Skin Case", name = "Spray"},
     ["Crossbone"] = {folder = "Spooky Skin Case", name = "Crossbow"},
@@ -242,7 +238,6 @@ local EXACT_SKIN_MAP = {
     ["Warpbone"] = {folder = "Spooky Skin Case", name = "Warpbone"},
     ["Soul Rifle"] = {folder = "Spooky Skin Case", name = "Soul Rifle"},
     ["Pumpkin Minigun"] = {folder = "Spooky Skin Case", name = "Pumpkin Minigun"},
-
     ["Bubblethrower"] = {folder = "Summer Skin Case", name = "Flamethrower"},
     ["Campfire Stick"] = {folder = "Summer Skin Case", name = "Molotov"},
     ["Bubble Ray"] = {folder = "Summer Skin Case", name = "Freeze Ray"},
@@ -293,7 +288,6 @@ local EXACT_SKIN_MAP = {
     ["Lemonade Gun"] = {folder = "Summer Skin Case", name = "Lemonade Gun"},
     ["Sand FAMAS"] = {folder = "Summer Skin Case", name = "Sand FAMAS"},
     ["Permasand"] = {folder = "Summer Skin Case", name = "Permasand"},
-
     ["Arch Katana"] = {folder = "Seasons", name = "Katana"},
     ["Arch Uzi"] = {folder = "Seasons", name = "Uzi"},
     ["Spy Gloves"] = {folder = "Seasons", name = "Spy Gloves"},
@@ -302,7 +296,6 @@ local EXACT_SKIN_MAP = {
     ["Electropunk Warper"] = {folder = "Seasons", name = "Electropunk Warper"},
     ["Electropunk Distortion"] = {folder = "Seasons", name = "Electropunk Distortion"},
     ["Unstable Warpstone"] = {folder = "Seasons", name = "Unstable Warpstone"},
-
     ["Firework Launcher"] = {folder = "Festive Skin Case", name = "RPG"},
     ["Pine Burst"] = {folder = "Festive Skin Case", name = "Pine Burst"},
     ["Snowball Launcher"] = {folder = "Festive Skin Case", name = "Snowball Launcher"},
@@ -349,7 +342,6 @@ local EXACT_SKIN_MAP = {
     ["Peppermint Sheriff"] = {folder = "Festive Skin Case", name = "Peppermint Sheriff"}
 }
 
--- Extra verified aliases
 EXACT_SKIN_MAP["AKEY-47"] = {folder = "Bundles", name = "Assault Rifle"}
 EXACT_SKIN_MAP["Key Bow"] = {folder = "Bundles", name = "Bow"}
 EXACT_SKIN_MAP["Key Spray"] = {folder = "Bundles", name = "Spray"}
@@ -448,7 +440,7 @@ local function fixDaggersParts(skinModel)
                     meshCount = meshCount + 1
                     local nc = rd(c.Address + OFF.NameContainer)
                     if nc then
-                        pcall(mwr, "string", nc + 8, "MeshPart" .. meshCount .. string.char(0))
+                        pcall(mwr, "string", nc + 8, "MeshPart" .. meshCount .. "\0")
                     end
                 end
             end
@@ -458,6 +450,9 @@ end
 
 local function cleanSkinModel(m)
     if not m then return end
+    if m:FindFirstChild("Body") and m.Body:FindFirstChild("Primary") then
+        pcall(function() m.PrimaryPart = m.Body.Primary end)
+    end
     for _, c in ipairs(m:GetChildren()) do
         local n = c.Name:lower()
         if n:find("leg") or n:find("shell") or n:find("%.r") or n:find("%.l") or n == "_fake" then
@@ -540,9 +535,9 @@ local function applySkinSwapper()
                 
                 if skinModel and skinModel.Address and defModel then
                     if weaponName == "Crossbow" or skinTarget:find("Crossbow") or skinTarget:find("Bow") then
-                        fixArrowParts(skinModel)
+                        pcall(fixArrowParts, skinModel)
                     elseif weaponName == "Daggers" or skinTarget:find("Daggers") or skinTarget:find("Kunai") then
-                        fixDaggersParts(skinModel)
+                        pcall(fixDaggersParts, skinModel)
                     end
                     cleanSkinModel(skinModel)
                     
