@@ -1,7 +1,3 @@
--- =========================================================================
---  RIVALS ULTIMATE HYBRID MASTER SKIN CHANGER (Mesh + Model + Audio + VFX)
--- =========================================================================
-
 if not pcall(memory_read, "int", game.Address) then 
     pcall(notify, "UnsafeLua is disabled in executor.", "SC", 5) 
     return 
@@ -45,10 +41,10 @@ local wr = function(a, v)
 end
 
 local OFF = {
-    Parent = 104,          -- 0x68
-    NameContainer = 112,   -- 0x70
-    Children = 120,        -- 0x78
-    Transparency = 304     -- BasePart.Transparency
+    Parent = 104,
+    NameContainer = 112,
+    Children = 120,
+    Transparency = 304
 }
 
 local tf = A and A:FindFirstChild("Throwables")
@@ -78,7 +74,6 @@ local WEAPON_SLOT_INDEX = {
     ["Grappler"] = 47, ["War Horn"] = 48
 }
 
--- Simple 1-part skins that benefit directly from clean Mesh & Texture swapping
 local MESH_SWAP_CANDIDATES = {
     ["Hand Gun"] = true,
     ["Armature.001"] = true,
@@ -97,9 +92,7 @@ local MESH_SWAP_CANDIDATES = {
     ["Brass Knuckles"] = true
 }
 
--- 100% Complete Case & Subfolder Lookup Table
 local EXACT_SKIN_MAP = {
-    -- Bundles
     ["Box of Chocolates"] = {folder = "Bundles", name = "Medkit"},
     ["Balloon Launcher"] = {folder = "Bundles", name = "Grenade Launcher"},
     ["Balloon Axe"] = {folder = "Bundles", name = "Battle Axe"},
@@ -124,7 +117,6 @@ local EXACT_SKIN_MAP = {
     ["Cutlass"] = {folder = "Bundles", name = "Cutlass"},
     ["Riptide Katana"] = {folder = "Bundles", name = "Riptide Katana"},
 
-    -- Skin Case 1
     ["Blaster"] = {folder = "Skin Case", name = "Handgun"},
     ["Advanced Satchel"] = {folder = "Skin Case", name = "Satchel"},
     ["Boomstick"] = {folder = "Skin Case", name = "Shotgun"},
@@ -162,7 +154,6 @@ local EXACT_SKIN_MAP = {
     ["Glitter Warper"] = {folder = "Skin Case", name = "Glitter Warper"},
     ["Trumpet"] = {folder = "Skin Case", name = "Trumpet"},
 
-    -- Skin Case 2
     ["Camera"] = {folder = "Skin Case 2", name = "Flashbang"},
     ["Balance"] = {folder = "Skin Case 2", name = "Smoke Grenade"},
     ["Garden Shovel"] = {folder = "Skin Case 2", name = "Trowel"},
@@ -204,7 +195,6 @@ local EXACT_SKIN_MAP = {
     ["Handsaws"] = {folder = "Skin Case 2", name = "Handsaws"},
     ["Hand Gun"] = {folder = "Skin Case 2", name = "Hand Gun"},
 
-    -- Skin Case 3
     ["Balisong"] = {folder = "Skin Case 3", name = "Knife"},
     ["DIY Tripmine"] = {folder = "Skin Case 3", name = "Subspace Tripmine"},
     ["Air Horn"] = {folder = "Skin Case 3", name = "War Horn"},
@@ -233,7 +223,6 @@ local EXACT_SKIN_MAP = {
     ["Void Rifle"] = {folder = "Skin Case 3", name = "Void Rifle"},
     ["Fists of Hurt"] = {folder = "Skin Case 3", name = "Fists of Hurt"},
 
-    -- Spooky Skin Case
     ["Boneclaw Revolver"] = {folder = "Spooky Skin Case", name = "Revolver"},
     ["Boneclaw Spray"] = {folder = "Spooky Skin Case", name = "Spray"},
     ["Crossbone"] = {folder = "Spooky Skin Case", name = "Crossbow"},
@@ -279,7 +268,6 @@ local EXACT_SKIN_MAP = {
     ["Soul Rifle"] = {folder = "Spooky Skin Case", name = "Soul Rifle"},
     ["Pumpkin Minigun"] = {folder = "Spooky Skin Case", name = "Pumpkin Minigun"},
 
-    -- Summer Skin Case
     ["Bubblethrower"] = {folder = "Summer Skin Case", name = "Flamethrower"},
     ["Campfire Stick"] = {folder = "Summer Skin Case", name = "Molotov"},
     ["Bubble Ray"] = {folder = "Summer Skin Case", name = "Freeze Ray"},
@@ -331,7 +319,6 @@ local EXACT_SKIN_MAP = {
     ["Sand FAMAS"] = {folder = "Summer Skin Case", name = "Sand FAMAS"},
     ["Permasand"] = {folder = "Summer Skin Case", name = "Permasand"},
 
-    -- Seasons
     ["Arch Katana"] = {folder = "Seasons", name = "Katana"},
     ["Arch Uzi"] = {folder = "Seasons", name = "Uzi"},
     ["Arch Crossbow"] = {folder = "Seasons", name = "Crossbow"},
@@ -342,7 +329,6 @@ local EXACT_SKIN_MAP = {
     ["Electropunk Distortion"] = {folder = "Seasons", name = "Electropunk Distortion"},
     ["Unstable Warpstone"] = {folder = "Seasons", name = "Unstable Warpstone"},
 
-    -- Festive Skin Case
     ["Firework Launcher"] = {folder = "Festive Skin Case", name = "RPG"},
     ["Pine Burst"] = {folder = "Festive Skin Case", name = "Pine Burst"},
     ["Snowball Launcher"] = {folder = "Festive Skin Case", name = "Snowball Launcher"},
@@ -466,7 +452,6 @@ local function swapMeshAndTexture(defaultModel, skinModel)
     return false
 end
 
--- Custom Sound Effects Callback Swapper
 task.spawn(function()
     local pfx = function(n) return n:lower():gsub("[%s%-'%.]+", "") end
     local AL = nil
@@ -572,11 +557,10 @@ local function applyHybrid()
             end
         end 
     end
-    print("Hybrid Master Swapper: Successfully swapped " .. swappedCount .. " weapons!")
 end
 
 applyHybrid()
-pcall(notify, "Hybrid Master Swapper Active!", "SC", 4)
+pcall(notify, "Updated to v1.2", "SC", 4)
 
 local TS = game:GetService("TeleportService")
 if TS then
