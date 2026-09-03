@@ -423,21 +423,18 @@ local function findSkinModel(skinTarget)
     return nil
 end
 
--- Specialized Crossbow arrow rig to avoid infinite yield in equip animations
+-- Specialized Crossbow arrow rig to satisfy both _Setup and ViewModel logic
 local function fixArrowRig(skinModel)
     local arrow = skinModel:FindFirstChild("Arrow")
     if not arrow then return end
-    local parts = {}
-    for _, c in ipairs(arrow:GetChildren()) do
-        if c:IsA("BasePart") then table.insert(parts, c) end
+    local children = arrow:GetChildren()
+    if #children >= 1 and children[1].Address then
+        local nc1 = rd(children[1].Address + OFF.NameContainer)
+        if nc1 then pcall(mwr, "string", nc1 + 8, "Primary\0") end
     end
-    if #parts >= 1 and parts[1].Address then
-        local nc = rd(parts[1].Address + OFF.NameContainer)
-        if nc then pcall(mwr, "string", nc + 8, "Stick\0") end
-    end
-    if #parts >= 2 and parts[2].Address then
-        local nc = rd(parts[2].Address + OFF.NameContainer)
-        if nc then pcall(mwr, "string", nc + 8, "Tip\0") end
+    if #children >= 2 and children[2].Address then
+        local nc2 = rd(children[2].Address + OFF.NameContainer)
+        if nc2 then pcall(mwr, "string", nc2 + 8, "MeshPart\0") end
     end
 end
 
@@ -482,14 +479,20 @@ local function rigSkinModel(m)
         pcall(function() m.PrimaryPart = m:FindFirstChildWhichIsA("BasePart", true) end)
     end
     
-    -- Hide extraneous decorative parts
+    -- Hide extraneous decorative parts, limbs, inspect props, and floating items
     for _, c in ipairs(m:GetChildren()) do
         local n = c.Name:lower()
-        if n:find("leg") or n:find("shell") or n:find("%.r") or n:find("%.l") or n == "_fake" then
+        if n:find("leg") or n:find("shell") or n:find("%.r") or n:find("%.l") or n == "_fake"
+           or n:find("arm") or n:find("sleeve") or n:find("juggle")
+           or n:find("watermelon") or n:find("banana") or n:find("apple")
+           or n:find("fruit") then
             for _, desc in ipairs(c:GetDescendants()) do
                 if desc.Address then
                     pcall(mwr, "float", desc.Address + OFF.Transparency, 1.0)
                 end
+            end
+            if c:IsA("BasePart") and c.Address then
+                pcall(mwr, "float", c.Address + OFF.Transparency, 1.0)
             end
         end
     end
@@ -602,12 +605,12 @@ local function applySkinSwapper()
             if defModel and skinModel and defModel.Address and skinModel.Address then
                 local slotAddr = findSlotAddressForWeapon(defModel)
                 if slotAddr then
+                    rigSkinModel(skinModel)
                     if weaponName == "Crossbow" or skinTarget:find("Crossbow") or skinTarget:find("Bow") then
                         pcall(fixArrowRig, skinModel)
                     elseif weaponName == "Daggers" or skinTarget:find("Daggers") or skinTarget:find("Kunai") then
                         pcall(fixDaggersRig, skinModel)
                     end
-                    rigSkinModel(skinModel)
                     
                     local origSlot = rd(slotAddr)
                     local origSkinNC = rd(skinModel.Address + OFF.NameContainer)
