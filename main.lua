@@ -60,19 +60,17 @@ local ga = function(f)
     if b and e then return b, e end 
 end
 
--- Fixed slot indices in the Weapons vector
-local WEAPON_SLOT_INDEX = {
-    ["Assault Rifle"] = 0, ["Warper"] = 1, ["Bow"] = 2, ["Burst Rifle"] = 3, ["Chainsaw"] = 4, ["Sniper"] = 5,
-    ["Daggers"] = 6, ["Jump Pad"] = 7, ["Permafrost"] = 8, ["Uzi"] = 9, ["Exogun"] = 10, ["Maul"] = 11,
-    ["Grenade"] = 12, ["Flare Gun"] = 13, ["Flashbang"] = 14, ["Freeze Ray"] = 15, ["Flamethrower"] = 16,
-    ["Energy Rifle"] = 17, ["Gunblade"] = 18, ["Handgun"] = 19, ["Spear"] = 20, ["Katana"] = 21,
-    ["Knife"] = 22, ["Medkit"] = 23, ["Minigun"] = 24, ["Molotov"] = 25, ["Paintball Gun"] = 26,
-    ["RPG"] = 27, ["Revolver"] = 28, ["Riot Shield"] = 29, ["Satchel"] = 30, ["Scythe"] = 32,
-    ["Shorty"] = 33, ["Shotgun"] = 34, ["Slingshot"] = 35, ["Smoke Grenade"] = 36, ["Crossbow"] = 37,
-    ["Spray"] = 38, ["Battle Axe"] = 39, ["Trowel"] = 40, ["Grenade Launcher"] = 41, ["Warpstone"] = 42,
-    ["Distortion"] = 43, ["Subspace Tripmine"] = 44, ["Energy Pistols"] = 45, ["Fists"] = 46,
-    ["Grappler"] = 47, ["War Horn"] = 48
-}
+-- Dynamic weapon slot resolution in memory vector
+local function findSlotAddressForWeapon(weaponModel)
+    local b, e = ga(wf)
+    if not b or not e then return nil end
+    for slotAddr = b, e - 16, 16 do
+        if rd(slotAddr) == weaponModel.Address then
+            return slotAddr
+        end
+    end
+    return nil
+end
 
 -- Skin to folder and internal model name mapping
 local EXACT_SKIN_MAP = {
@@ -391,12 +389,12 @@ EXACT_SKIN_MAP["Harpoon"] = {folder = "Summer Skin Case", name = "Broken Surfboa
 -- Memory restore registration
 local memoryRestores = {}
 
-local function registerRestore(slotAddr, origSlot, skinAddr, origName)
+local function registerRestore(slotAddr, origSlot, skinAddr, origSkinName)
     table.insert(memoryRestores, {
         slot = slotAddr,
         origSlot = origSlot,
         skin = skinAddr,
-        origName = origName
+        origSkinName = origSkinName
     })
 end
 
@@ -404,7 +402,10 @@ end
 local function restoreAllMemory()
     for _, r in ipairs(memoryRestores) do
         pcall(mwr, "uintptr_t", r.slot, r.origSlot)
-        pcall(mwr, "uintptr_t", r.skin + OFF.NameContainer, r.origName)
+        local skinNC = rd(r.skin + OFF.NameContainer)
+        if skinNC and r.origSkinName then
+            pcall(mwr, "string", skinNC + 8, r.origSkinName .. "\0")
+        end
     end
     memoryRestores = {}
 end
@@ -425,26 +426,26 @@ local function findSkinModel(skinTarget)
     return nil
 end
 
--- Fix Crossbow arrow rig to avoid infinite yield in equip animations
-local function fixArrowParts(skinModel)
+-- Specialized Crossbow arrow rig to avoid infinite yield in equip animations
+local function fixArrowRig(skinModel)
     local arrow = skinModel:FindFirstChild("Arrow")
     if not arrow then return end
-    local children = arrow:GetChildren()
-    if #children >= 2 then
-        local c1, c2 = children[1], children[2]
-        if c1.Address then
-            local nc1 = rd(c1.Address + OFF.NameContainer)
-            if nc1 then pcall(mwr, "string", nc1 + 8, "Stick\0") end
-        end
-        if c2.Address then
-            local nc2 = rd(c2.Address + OFF.NameContainer)
-            if nc2 then pcall(mwr, "string", nc2 + 8, "Tip\0") end
-        end
+    local parts = {}
+    for _, c in ipairs(arrow:GetChildren()) do
+        if c:IsA("BasePart") then table.insert(parts, c) end
+    end
+    if #parts >= 1 and parts[1].Address then
+        local nc = rd(parts[1].Address + OFF.NameContainer)
+        if nc then pcall(mwr, "string", nc + 8, "Stick\0") end
+    end
+    if #parts >= 2 and parts[2].Address then
+        local nc = rd(parts[2].Address + OFF.NameContainer)
+        if nc then pcall(mwr, "string", nc + 8, "Tip\0") end
     end
 end
 
--- Fix Daggers body parts for dual blade animations
-local function fixDaggersParts(skinModel)
+-- Specialized Daggers rig for dual blade animations
+local function fixDaggersRig(skinModel)
     for _, bodyName in ipairs({"LeftBody", "RightBody"}) do
         local body = skinModel:FindFirstChild(bodyName)
         if body then
@@ -462,25 +463,29 @@ local function fixDaggersParts(skinModel)
     end
 end
 
--- Model cleanup and primary part setup
-local function cleanSkinModel(m)
+-- Universal component rigger and primary part validator
+local function rigSkinModel(m)
     if not m then return end
+    
+    -- Ensure all submodels have a Primary part so ClientViewModel._Setup does not crash
     for _, sub in ipairs(m:GetChildren()) do
         if sub:IsA("Model") and not sub:FindFirstChild("Primary") then
-            for _, c in ipairs(sub:GetChildren()) do
-                if c:IsA("BasePart") then
-                    local nc = rd(c.Address + OFF.NameContainer)
-                    if nc then
-                        pcall(mwr, "string", nc + 8, "Primary\0")
-                        break
-                    end
-                end
+            local firstPart = sub:FindFirstChildWhichIsA("BasePart")
+            if firstPart and firstPart.Address then
+                local nc = rd(firstPart.Address + OFF.NameContainer)
+                if nc then pcall(mwr, "string", nc + 8, "Primary\0") end
             end
         end
     end
+    
+    -- Ensure top-level PrimaryPart is set for Locker and Scene camera
     if m:FindFirstChild("Body") and m.Body:FindFirstChild("Primary") then
         pcall(function() m.PrimaryPart = m.Body.Primary end)
+    elseif not m.PrimaryPart then
+        pcall(function() m.PrimaryPart = m:FindFirstChildWhichIsA("BasePart", true) end)
     end
+    
+    -- Hide extraneous decorative parts
     for _, c in ipairs(m:GetChildren()) do
         local n = c.Name:lower()
         if n:find("leg") or n:find("shell") or n:find("%.r") or n:find("%.l") or n == "_fake" then
@@ -545,9 +550,6 @@ local function applySkinSwapper()
     local configFileName = "rivals_config.lua"
     if not isfile or not readfile or not isfile(configFileName) then return end
     
-    local b, e = ga(wf)
-    if not b then return end
-    
     local r2 = readfile(configFileName)
     local swappedCount = 0
 
@@ -556,27 +558,29 @@ local function applySkinSwapper()
         if q then 
             local weaponName = l:sub(1, q - 1):match("^%s*(.-)%s*$")
             local skinTarget = l:sub(q + 1):match("^%s*(.-)%s*$")
-            local slotIdx = WEAPON_SLOT_INDEX[weaponName]
             
-            if slotIdx then
-                local slotAddr = b + slotIdx * 16
-                local skinModel = findSkinModel(skinTarget)
-                local defModel = wf:FindFirstChild(weaponName)
-                
-                if skinModel and skinModel.Address and defModel then
+            local defModel = wf:FindFirstChild(weaponName)
+            local skinModel = findSkinModel(skinTarget)
+            
+            if defModel and skinModel and defModel.Address and skinModel.Address then
+                local slotAddr = findSlotAddressForWeapon(defModel)
+                if slotAddr then
                     if weaponName == "Crossbow" or skinTarget:find("Crossbow") or skinTarget:find("Bow") then
-                        pcall(fixArrowParts, skinModel)
+                        pcall(fixArrowRig, skinModel)
                     elseif weaponName == "Daggers" or skinTarget:find("Daggers") or skinTarget:find("Kunai") then
-                        pcall(fixDaggersParts, skinModel)
+                        pcall(fixDaggersRig, skinModel)
                     end
-                    cleanSkinModel(skinModel)
+                    rigSkinModel(skinModel)
                     
                     local origSlot = rd(slotAddr)
-                    local origName = rd(skinModel.Address + OFF.NameContainer)
+                    local origSkinName = skinModel.Name
                     
-                    registerRestore(slotAddr, origSlot, skinModel.Address, origName)
+                    local skinNC = rd(skinModel.Address + OFF.NameContainer)
+                    if skinNC then
+                        pcall(mwr, "string", skinNC + 8, weaponName .. "\0")
+                    end
                     
-                    wr(skinModel.Address + OFF.NameContainer, rd(origSlot + OFF.NameContainer))
+                    registerRestore(slotAddr, origSlot, skinModel.Address, origSkinName)
                     wr(slotAddr, skinModel.Address)
                     
                     swappedCount = swappedCount + 1
@@ -588,7 +592,7 @@ end
 
 -- Run swapper and display notification
 applySkinSwapper()
-pcall(notify, "Updated to v1.2", "SC", 4)
+pcall(notify, "Rivals Skin Changer Active", "SC", 4)
 
 -- Clean up memory on place teardown or disconnect
 if wf then
