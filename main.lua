@@ -495,7 +495,47 @@ local function rigSkinModel(m)
     end
 end
 
--- Sound callback audio swapping
+-- ViewModel logic module families mapping
+local VM_MODULE_FAMILIES = {
+    ["Crossbow"] = "BaseCrossbow",
+    ["RPG"] = "BaseRPG",
+    ["Bow"] = "BaseBow",
+    ["Satchel"] = "BaseSatchel",
+    ["Chainsaw"] = "BaseChainsaw",
+    ["Daggers"] = "BaseDaggers",
+    ["Slingshot"] = "BaseSlingshot"
+}
+
+-- Swap specialized ViewModel ModuleScripts to prevent infinite WaitForChild yields
+local function swapViewModelModule(baseFolderName, defaultModName, skinModName)
+    local vmMods = LP.PlayerScripts.Modules:FindFirstChild("ViewModels")
+    if not vmMods then return end
+    local baseFolder = vmMods:FindFirstChild(baseFolderName)
+    if not baseFolder then return end
+    
+    local defaultMod = baseFolder:FindFirstChild(defaultModName)
+    local skinMod = baseFolder:FindFirstChild(skinModName)
+    if not defaultMod or not skinMod or not defaultMod.Address or not skinMod.Address then return end
+    
+    local n = rd(baseFolder.Address + OFF.Children)
+    if not n or n == 0 then return end
+    local b, e = rd(n), rd(n + 8)
+    if not b or not e then return end
+    
+    for slot = b, e - 16, 16 do
+        if rd(slot) == defaultMod.Address then
+            local origSlot = rd(slot)
+            local origSkinNC = rd(skinMod.Address + OFF.NameContainer)
+            local defNC = rd(defaultMod.Address + OFF.NameContainer)
+            
+            registerRestore(slot, origSlot, skinMod.Address, origSkinNC)
+            
+            wr(skinMod.Address + OFF.NameContainer, defNC)
+            wr(slot, skinMod.Address)
+            break
+        end
+    end
+end
 task.spawn(function()
     local pfx = function(n) return n:lower():gsub("[%s%-'%.]+", "") end
     local AL = nil
@@ -577,6 +617,10 @@ local function applySkinSwapper()
                     
                     wr(skinModel.Address + OFF.NameContainer, defNC)
                     wr(slotAddr, skinModel.Address)
+                    
+                    if VM_MODULE_FAMILIES[weaponName] then
+                        pcall(swapViewModelModule, VM_MODULE_FAMILIES[weaponName], weaponName, skinTarget)
+                    end
                     
                     swappedCount = swappedCount + 1
                 end
