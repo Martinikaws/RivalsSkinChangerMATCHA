@@ -485,11 +485,11 @@ local function rigSkinModel(m)
     -- Ensure every BasePart is unanchored, collision-disabled, and massless
     for _, desc in ipairs(m:GetDescendants()) do
         if desc:IsA("BasePart") then
-            desc.Anchored = false
-            desc.CanCollide = false
-            desc.CanTouch = false
-            desc.CanQuery = false
-            desc.Massless = true
+            pcall(function() desc.Anchored = false end)
+            pcall(function() desc.CanCollide = false end)
+            pcall(function() desc.CanTouch = false end)
+            pcall(function() desc.CanQuery = false end)
+            pcall(function() desc.Massless = true end)
         end
     end
     
