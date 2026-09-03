@@ -465,6 +465,19 @@ end
 -- Model cleanup and primary part setup
 local function cleanSkinModel(m)
     if not m then return end
+    for _, sub in ipairs(m:GetChildren()) do
+        if sub:IsA("Model") and not sub:FindFirstChild("Primary") then
+            for _, c in ipairs(sub:GetChildren()) do
+                if c:IsA("BasePart") then
+                    local nc = rd(c.Address + OFF.NameContainer)
+                    if nc then
+                        pcall(mwr, "string", nc + 8, "Primary\0")
+                        break
+                    end
+                end
+            end
+        end
+    end
     if m:FindFirstChild("Body") and m.Body:FindFirstChild("Primary") then
         pcall(function() m.PrimaryPart = m.Body.Primary end)
     end
