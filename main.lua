@@ -29,7 +29,6 @@ if wf then
 end
 
 local mrd, mwr, pcall, ipairs, pairs = memory_read, memory_write, pcall, ipairs, pairs
-local floor = math.floor
 
 local rd = function(a) 
     local o, v = pcall(mrd, "uintptr_t", a)
@@ -47,11 +46,10 @@ local OFF = {
     Transparency = 304
 }
 
-local tf = A and A:FindFirstChild("Throwables")
-local pf = A and A:FindFirstChild("Projectiles")
-local mi = A and A:FindFirstChild("Misc")
-
-local ff = function(p, n) return p and p:FindFirstChild(n) end
+local MESHPART = {
+    MeshId = 784,
+    Texture = 832
+}
 
 local ga = function(f) 
     if not f or not f.Address then return end
@@ -72,24 +70,6 @@ local WEAPON_SLOT_INDEX = {
     ["Spray"] = 38, ["Battle Axe"] = 39, ["Trowel"] = 40, ["Grenade Launcher"] = 41, ["Warpstone"] = 42,
     ["Distortion"] = 43, ["Subspace Tripmine"] = 44, ["Energy Pistols"] = 45, ["Fists"] = 46,
     ["Grappler"] = 47, ["War Horn"] = 48
-}
-
-local MESH_SWAP_CANDIDATES = {
-    ["Hand Gun"] = true,
-    ["Armature.001"] = true,
-    ["Balisong"] = true,
-    ["Chancla"] = true,
-    ["Stick"] = true,
-    ["Machete"] = true,
-    ["Candy Cane"] = true,
-    ["Pencil"] = true,
-    ["Water Gun"] = true,
-    ["Karambit"] = true,
-    ["Keylisong"] = true,
-    ["Keyrambit"] = true,
-    ["Banana Flare"] = true,
-    ["Boxing Gloves"] = true,
-    ["Brass Knuckles"] = true
 }
 
 local EXACT_SKIN_MAP = {
@@ -376,78 +356,208 @@ local EXACT_SKIN_MAP = {
 }
 
 local memoryRestores = {}
+local hybridClones = {}
 
-local function registerRestore(slotAddr, origSlot, skinAddr, origName)
+local function registerRestore(slotAddr, origSlot)
     table.insert(memoryRestores, {
         slot = slotAddr,
-        origSlot = origSlot,
-        skin = skinAddr,
-        origName = origName
+        origSlot = origSlot
     })
 end
 
 local function restoreAllMemory()
     for _, r in ipairs(memoryRestores) do
         pcall(mwr, "uintptr_t", r.slot, r.origSlot)
-        pcall(mwr, "uintptr_t", r.skin + OFF.NameContainer, r.origName)
     end
     memoryRestores = {}
+    for _, clone in ipairs(hybridClones) do
+        pcall(function() clone:Destroy() end)
+    end
+    hybridClones = {}
 end
 
-local function cleanSkinModel(m)
-    if not m then return end
-    local mainBody = m:FindFirstChild("Body") or m:FindFirstChild("Model") or m:FindFirstChild("Trunk") or m:FindFirstChild("Bottom") or m:FindFirstChild("LeftBody") or m:GetChildren()[1]
+local function findSkinModel(skinTarget)
+    if EXACT_SKIN_MAP[skinTarget] then
+        local f = vm:FindFirstChild(EXACT_SKIN_MAP[skinTarget].folder)
+        if f then
+            local m = f:FindFirstChild(EXACT_SKIN_MAP[skinTarget].name)
+            if m then return m end
+        end
+    end
+    for _, folder in ipairs(vm:GetChildren()) do
+        if folder:IsA("Folder") and folder.Name ~= "Weapons" then
+            local m = folder:FindFirstChild(skinTarget)
+            if m then return m end
+        end
+    end
+    return nil
+end
 
-    for _, c in ipairs(m:GetChildren()) do
-        local n = c.Name:lower()
-        if n:find("leg") or n:find("shell") or n:find("%.r") or n:find("%.l") or n == "_fake" then
-            for _, desc in ipairs(c:GetDescendants()) do
-                if desc.Address then
-                    pcall(mwr, "float", desc.Address + OFF.Transparency, 1.0)
+local function getMeshParts(model)
+    local parts = {}
+    for _, desc in ipairs(model:GetDescendants()) do
+        if desc:IsA("MeshPart") then
+            table.insert(parts, desc)
+        end
+    end
+    return parts
+end
+
+local function getBaseParts(model)
+    local parts = {}
+    for _, desc in ipairs(model:GetDescendants()) do
+        if desc:IsA("BasePart") then
+            table.insert(parts, desc)
+        end
+    end
+    return parts
+end
+
+local function transplantMesh(targetPart, sourcePart)
+    if not targetPart or not sourcePart then return end
+    if not targetPart.Address or not sourcePart.Address then return end
+    local srcMeshId = rd(sourcePart.Address + MESHPART.MeshId)
+    local srcTexture = rd(sourcePart.Address + MESHPART.Texture)
+    if srcMeshId and srcMeshId ~= 0 then
+        wr(targetPart.Address + MESHPART.MeshId, srcMeshId)
+    end
+    if srcTexture and srcTexture ~= 0 then
+        wr(targetPart.Address + MESHPART.Texture, srcTexture)
+    end
+    pcall(function()
+        targetPart.Color = sourcePart.Color
+        targetPart.Material = sourcePart.Material
+        targetPart.Reflectance = sourcePart.Reflectance
+    end)
+end
+
+local function createHybridClone(defaultModel, skinModel)
+    local hybrid = defaultModel:Clone()
+    
+    local defParts = getMeshParts(hybrid)
+    local skinParts = getMeshParts(skinModel)
+    
+    if #defParts == 0 or #skinParts == 0 then
+        hybrid:Destroy()
+        return nil
+    end
+    
+    for i, defPart in ipairs(defParts) do
+        if i <= #skinParts then
+            transplantMesh(defPart, skinParts[i])
+        else
+            pcall(mwr, "float", defPart.Address + OFF.Transparency, 1.0)
+        end
+    end
+    
+    if #skinParts > #defParts then
+        local bodyContainer = hybrid:FindFirstChild("Body") or hybrid:FindFirstChildWhichIsA("Model") or hybrid
+        local anchorPart = defParts[1]
+        for i = #defParts + 1, #skinParts do
+            local extraClone = skinParts[i]:Clone()
+            extraClone.Parent = bodyContainer
+            if anchorPart then
+                pcall(function()
+                    local w = Instance.new("WeldConstraint")
+                    w.Part0 = anchorPart
+                    w.Part1 = extraClone
+                    w.Parent = extraClone
+                end)
+            end
+        end
+    end
+    
+    for _, child in ipairs(skinModel:GetChildren()) do
+        local n = child.Name:lower()
+        if child:IsA("Model") and (n:find("wing") or n:find("arrow") or n:find("string") or n:find("beam") or n:find("glow") or n:find("light") or n:find("scope") or n:find("effect") or n:find("particle") or n:find("trail")) then
+            local vfxClone = child:Clone()
+            vfxClone.Parent = hybrid:FindFirstChild("Body") or hybrid
+        end
+    end
+    
+    hybrid.Parent = vm
+    table.insert(hybridClones, hybrid)
+    return hybrid
+end
+
+local skinLookup = {}
+
+local function loadConfig()
+    local configFileName = "rivals_config.lua"
+    if not isfile or not readfile or not isfile(configFileName) then return end
+    local r2 = readfile(configFileName)
+    skinLookup = {}
+    for l in r2:gmatch("[^\r\n]+") do 
+        local q = l:find("=")
+        if q then 
+            local w = l:sub(1, q - 1):match("^%s*(.-)%s*$")
+            local s = l:sub(q + 1):match("^%s*(.-)%s*$")
+            if w ~= "" and s ~= "" then
+                skinLookup[w] = s
+            end
+        end 
+    end
+end
+
+local function applyAllSkins()
+    loadConfig()
+    
+    local b, e = ga(wf)
+    if not b then return end
+    
+    local swapped = 0
+    
+    for weaponName, skinTarget in pairs(skinLookup) do
+        local slotIdx = WEAPON_SLOT_INDEX[weaponName]
+        if slotIdx then
+            local slotAddr = b + slotIdx * 16
+            local defModel = wf:FindFirstChild(weaponName)
+            local skinModel = findSkinModel(skinTarget)
+            
+            if defModel and skinModel and skinModel.Address then
+                local hybrid = createHybridClone(defModel, skinModel)
+                if hybrid and hybrid.Address then
+                    local origSlot = rd(slotAddr)
+                    registerRestore(slotAddr, origSlot)
+                    wr(hybrid.Address + OFF.NameContainer, rd(origSlot + OFF.NameContainer))
+                    wr(slotAddr, hybrid.Address)
+                    swapped = swapped + 1
                 end
             end
-        elseif mainBody and c ~= mainBody and (n:find("drill") or n:find("sword") or n:find("slice") or n:find("top") or n:find("front") or n:find("back") or n:find("coconut") or n:find("leaf") or n:find("bullet")) then
-            for _, p in ipairs(c:GetChildren()) do
-                p.Parent = mainBody
-            end
         end
     end
 end
 
-local function swapMeshAndTexture(defaultModel, skinModel)
-    if not defaultModel or not skinModel then return false end
+local function applyLiveViewportSwap(weaponModel)
+    if not weaponModel then return end
+    local parts = string.split(weaponModel.Name, " - ")
+    local weaponName = parts[2]
+    if not weaponName then return end
     
-    local defMesh = nil
-    for _, desc in ipairs(defaultModel:GetDescendants()) do
-        if desc:IsA("MeshPart") then
-            defMesh = desc
-            break
-        end
+    local skinTarget = skinLookup[weaponName]
+    if not skinTarget then return end
+    
+    local skinModel = findSkinModel(skinTarget)
+    if not skinModel then return end
+    
+    local itemVisual = weaponModel:FindFirstChild("ItemVisual")
+    if not itemVisual then
+        itemVisual = weaponModel:WaitForChild("ItemVisual", 3)
     end
+    if not itemVisual then return end
     
-    local skinMesh = nil
-    for _, desc in ipairs(skinModel:GetDescendants()) do
-        if desc:IsA("MeshPart") then
-            skinMesh = desc
-            break
-        end
-    end
+    task.wait(0.1)
     
-    if defMesh and skinMesh then
-        pcall(function()
-            defMesh.TextureID = skinMesh.TextureID
-            defMesh.Color = skinMesh.Color
-            defMesh.Material = skinMesh.Material
-        end)
-        
-        for _, desc in ipairs(skinModel:GetDescendants()) do
-            if desc:IsA("BasePart") and desc.Address and desc ~= skinMesh then
-                pcall(mwr, "float", desc.Address + OFF.Transparency, 1.0)
+    local liveParts = getMeshParts(itemVisual)
+    local skinParts = getMeshParts(skinModel)
+    
+    if #liveParts > 0 and #skinParts > 0 then
+        for i, livePart in ipairs(liveParts) do
+            if i <= #skinParts then
+                transplantMesh(livePart, skinParts[i])
             end
         end
-        return true
     end
-    return false
 end
 
 task.spawn(function()
@@ -468,27 +578,20 @@ task.spawn(function()
     local abn = {}
     for _, c in ipairs(SC:GetChildren()) do abn[c.Name] = c end
     
-    local configFileName = "rivals_config.lua"
-    if not isfile or not readfile or not isfile(configFileName) then return end
-    local r2 = readfile(configFileName)
+    loadConfig()
     
-    for l in r2:gmatch("[^\r\n]+") do
-        local q = l:find("=")
-        if q then
-            local w = l:sub(1, q - 1):match("^%s*(.-)%s*$")
-            local s = l:sub(q + 1):match("^%s*(.-)%s*$")
-            local wp, sp = pfx(w), pfx(s)
-            local spfx = wp .. "_" .. sp .. "_"
-            for name, inst in pairs(abn) do
-                if name:sub(1, #spfx) == spfx then
-                    local di = abn[wp .. "_" .. name:sub(#spfx + 1)]
-                    if di and inst.Address and di.Address then
-                        local a = rd(di.Address + 0x8)
-                        local b = rd(inst.Address + 0x8)
-                        if a and b and a ~= b then
-                            pcall(mwr, "uintptr_t", di.Address + 0x8, b)
-                            pcall(mwr, "uintptr_t", inst.Address + 0x8, a)
-                        end
+    for weaponName, skinTarget in pairs(skinLookup) do
+        local wp, sp = pfx(weaponName), pfx(skinTarget)
+        local spfx = wp .. "_" .. sp .. "_"
+        for name, inst in pairs(abn) do
+            if name:sub(1, #spfx) == spfx then
+                local di = abn[wp .. "_" .. name:sub(#spfx + 1)]
+                if di and inst.Address and di.Address then
+                    local a = rd(di.Address + 0x8)
+                    local b = rd(inst.Address + 0x8)
+                    if a and b and a ~= b then
+                        pcall(mwr, "uintptr_t", di.Address + 0x8, b)
+                        pcall(mwr, "uintptr_t", inst.Address + 0x8, a)
                     end
                 end
             end
@@ -496,67 +599,29 @@ task.spawn(function()
     end
 end)
 
-local function applyHybrid()
-    local configFileName = "rivals_config.lua"
-    if not isfile or not readfile or not isfile(configFileName) then return end
-    
-    local b, e = ga(wf)
-    if not b then return end
-    
-    local r2 = readfile(configFileName)
-    local swappedCount = 0
+applyAllSkins()
 
-    for l in r2:gmatch("[^\r\n]+") do 
-        local q = l:find("=")
-        if q then 
-            local weaponName = l:sub(1, q - 1):match("^%s*(.-)%s*$")
-            local skinTarget = l:sub(q + 1):match("^%s*(.-)%s*$")
-            local slotIdx = WEAPON_SLOT_INDEX[weaponName]
-            
-            if slotIdx then
-                local slotAddr = b + slotIdx * 16
-                local skinModel = nil
-                
-                if EXACT_SKIN_MAP[skinTarget] then
-                    local f = vm:FindFirstChild(EXACT_SKIN_MAP[skinTarget].folder)
-                    skinModel = f and f:FindFirstChild(EXACT_SKIN_MAP[skinTarget].name)
-                end
-                if not skinModel then
-                    for _, folder in ipairs(vm:GetChildren()) do
-                        if folder:IsA("Folder") and folder.Name ~= "Weapons" then
-                            if folder:FindFirstChild(skinTarget) then
-                                skinModel = folder:FindFirstChild(skinTarget)
-                                break
-                            end
-                        end
-                    end
-                end
-                
-                if skinModel and skinModel.Address then
-                    local defModel = wf:FindFirstChild(weaponName)
-                    
-                    if MESH_SWAP_CANDIDATES[skinTarget] and defModel then
-                        swapMeshAndTexture(defModel, skinModel)
-                        swappedCount = swappedCount + 1
-                    else
-                        cleanSkinModel(skinModel)
-                        local origSlot = rd(slotAddr)
-                        local origName = rd(skinModel.Address + OFF.NameContainer)
-                        
-                        registerRestore(slotAddr, origSlot, skinModel.Address, origName)
-                        
-                        wr(skinModel.Address + OFF.NameContainer, rd(origSlot + OFF.NameContainer))
-                        wr(slotAddr, skinModel.Address)
-                        swappedCount = swappedCount + 1
-                    end
-                end
-            end
-        end 
+task.spawn(function()
+    local fp = workspace:WaitForChild("ViewModels", 15)
+    if not fp then return end
+    fp = fp:WaitForChild("FirstPerson", 15)
+    if not fp then return end
+    
+    fp.ChildAdded:Connect(function(child)
+        task.spawn(function()
+            task.wait(0.15)
+            applyLiveViewportSwap(child)
+        end)
+    end)
+    
+    for _, child in ipairs(fp:GetChildren()) do
+        task.spawn(function()
+            applyLiveViewportSwap(child)
+        end)
     end
-end
+end)
 
-applyHybrid()
-pcall(notify, "Updated to v1.2", "SC", 4)
+pcall(notify, "Updated to v1.3", "SC", 4)
 
 if wf then
     pcall(function()
@@ -572,11 +637,6 @@ if TS then
         TS.TeleportInit:Connect(function()
             restoreAllMemory()
         end)
-        if TS.TeleportProcessing then
-            TS.TeleportProcessing:Connect(function()
-                restoreAllMemory()
-            end)
-        end
     end)
 end
 
