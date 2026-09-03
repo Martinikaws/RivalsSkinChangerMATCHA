@@ -1,8 +1,10 @@
+-- Memory access verification
 if not pcall(memory_read, "int", game.Address) then 
     pcall(notify, "UnsafeLua is disabled in executor.", "SC", 5) 
     return 
 end
 
+-- Wait for game and player loading
 if not game:IsLoaded() then game.Loaded:Wait() end
 
 local LP = game:GetService("Players").LocalPlayer
@@ -11,11 +13,13 @@ while not LP do
     LP = game:GetService("Players").LocalPlayer
 end
 
+-- Validate game universe
 if game.GameId ~= 6035872082 then return end
 
 local char = LP.Character or LP.CharacterAdded:Wait()
 if char then pcall(function() char:WaitForChild("HumanoidRootPart", 10) end) end
 
+-- Locate weapon models in player assets
 local A = LP:WaitForChild("PlayerScripts", 15):WaitForChild("Assets", 15)
 local vm = A and A:WaitForChild("ViewModels", 15)
 local wf = vm and vm:WaitForChild("Weapons", 15)
@@ -28,6 +32,7 @@ if wf then
     end
 end
 
+-- Memory read/write wrappers and offsets
 local mrd, mwr, pcall, ipairs, pairs = memory_read, memory_write, pcall, ipairs, pairs
 
 local rd = function(a) 
@@ -46,6 +51,7 @@ local OFF = {
     Transparency = 304
 }
 
+-- Instance child array pointer helper
 local ga = function(f) 
     if not f or not f.Address then return end
     local n = rd(f.Address + OFF.Children)
@@ -54,6 +60,7 @@ local ga = function(f)
     if b and e then return b, e end 
 end
 
+-- Fixed slot indices in the Weapons vector
 local WEAPON_SLOT_INDEX = {
     ["Assault Rifle"] = 0, ["Warper"] = 1, ["Bow"] = 2, ["Burst Rifle"] = 3, ["Chainsaw"] = 4, ["Sniper"] = 5,
     ["Daggers"] = 6, ["Jump Pad"] = 7, ["Permafrost"] = 8, ["Uzi"] = 9, ["Exogun"] = 10, ["Maul"] = 11,
@@ -67,6 +74,7 @@ local WEAPON_SLOT_INDEX = {
     ["Grappler"] = 47, ["War Horn"] = 48
 }
 
+-- Skin to folder and internal model name mapping
 local EXACT_SKIN_MAP = {
     ["Box of Chocolates"] = {folder = "Bundles", name = "Medkit"},
     ["Balloon Launcher"] = {folder = "Bundles", name = "Grenade Launcher"},
@@ -342,6 +350,7 @@ local EXACT_SKIN_MAP = {
     ["Peppermint Sheriff"] = {folder = "Festive Skin Case", name = "Peppermint Sheriff"}
 }
 
+-- Bundle and special case aliases
 EXACT_SKIN_MAP["AKEY-47"] = {folder = "Bundles", name = "Assault Rifle"}
 EXACT_SKIN_MAP["Key Bow"] = {folder = "Bundles", name = "Bow"}
 EXACT_SKIN_MAP["Key Spray"] = {folder = "Bundles", name = "Spray"}
@@ -379,6 +388,7 @@ EXACT_SKIN_MAP["Squid Flare"] = {folder = "Skin Case 3", name = "Banana Flare"}
 EXACT_SKIN_MAP["Uranium Launcher"] = {folder = "Skin Case 2", name = "Grenade Launcher"}
 EXACT_SKIN_MAP["Harpoon"] = {folder = "Summer Skin Case", name = "Broken Surfboard"}
 
+-- Memory restore registration
 local memoryRestores = {}
 
 local function registerRestore(slotAddr, origSlot, skinAddr, origName)
@@ -390,6 +400,7 @@ local function registerRestore(slotAddr, origSlot, skinAddr, origName)
     })
 end
 
+-- Revert pointers on place change to prevent engine crashes
 local function restoreAllMemory()
     for _, r in ipairs(memoryRestores) do
         pcall(mwr, "uintptr_t", r.slot, r.origSlot)
@@ -398,6 +409,7 @@ local function restoreAllMemory()
     memoryRestores = {}
 end
 
+-- Find skin model across asset folders
 local function findSkinModel(skinTarget)
     if EXACT_SKIN_MAP[skinTarget] then
         local f = vm:FindFirstChild(EXACT_SKIN_MAP[skinTarget].folder)
@@ -413,6 +425,7 @@ local function findSkinModel(skinTarget)
     return nil
 end
 
+-- Fix Crossbow arrow rig to avoid infinite yield in equip animations
 local function fixArrowParts(skinModel)
     local arrow = skinModel:FindFirstChild("Arrow")
     if not arrow then return end
@@ -430,6 +443,7 @@ local function fixArrowParts(skinModel)
     end
 end
 
+-- Fix Daggers body parts for dual blade animations
 local function fixDaggersParts(skinModel)
     for _, bodyName in ipairs({"LeftBody", "RightBody"}) do
         local body = skinModel:FindFirstChild(bodyName)
@@ -448,6 +462,7 @@ local function fixDaggersParts(skinModel)
     end
 end
 
+-- Model cleanup and primary part setup
 local function cleanSkinModel(m)
     if not m then return end
     if m:FindFirstChild("Body") and m.Body:FindFirstChild("Primary") then
@@ -465,6 +480,7 @@ local function cleanSkinModel(m)
     end
 end
 
+-- Sound callback audio swapping
 task.spawn(function()
     local pfx = function(n) return n:lower():gsub("[%s%-'%.]+", "") end
     local AL = nil
@@ -511,6 +527,7 @@ task.spawn(function()
     end
 end)
 
+-- Main skin swapper execution
 local function applySkinSwapper()
     local configFileName = "rivals_config.lua"
     if not isfile or not readfile or not isfile(configFileName) then return end
@@ -556,9 +573,11 @@ local function applySkinSwapper()
     end
 end
 
+-- Run swapper and display notification
 applySkinSwapper()
 pcall(notify, "Updated to v1.2", "SC", 4)
 
+-- Clean up memory on place teardown or disconnect
 if wf then
     pcall(function()
         wf.AncestryChanged:Connect(function()
