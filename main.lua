@@ -390,24 +390,32 @@ EXACT_SKIN_MAP["Harpoon"] = {folder = "Summer Skin Case", name = "Broken Surfboa
 -- Memory restore registration
 local memoryRestores = {}
 
-local function registerRestore(defSlot, origDefSlot, defAddr, origDefNC, skinSlot, origSkinSlot, skinAddr, origSkinNC)
+local function registerRestore(defSlot, origDefInst, origDefRef, defAddr, origDefNC, skinSlot, origSkinInst, origSkinRef, skinAddr, origSkinNC)
     table.insert(memoryRestores, {
         defSlot = defSlot,
-        origDefSlot = origDefSlot,
+        origDefInst = origDefInst,
+        origDefRef = origDefRef,
         defAddr = defAddr,
         origDefNC = origDefNC,
         skinSlot = skinSlot,
-        origSkinSlot = origSkinSlot,
+        origSkinInst = origSkinInst,
+        origSkinRef = origSkinRef,
         skinAddr = skinAddr,
         origSkinNC = origSkinNC
     })
 end
 
--- Revert pointers on place change to prevent engine crashes
+-- Revert pointers on place change or game exit to prevent engine crashes
 local function restoreAllMemory()
     for _, r in ipairs(memoryRestores) do
-        if r.defSlot and r.origDefSlot then pcall(mwr, "uintptr_t", r.defSlot, r.origDefSlot) end
-        if r.skinSlot and r.origSkinSlot then pcall(mwr, "uintptr_t", r.skinSlot, r.origSkinSlot) end
+        if r.defSlot and r.origDefInst then
+            pcall(mwr, "uintptr_t", r.defSlot, r.origDefInst)
+            if r.origDefRef then pcall(mwr, "uintptr_t", r.defSlot + 8, r.origDefRef) end
+        end
+        if r.skinSlot and r.origSkinInst then
+            pcall(mwr, "uintptr_t", r.skinSlot, r.origSkinInst)
+            if r.origSkinRef then pcall(mwr, "uintptr_t", r.skinSlot + 8, r.origSkinRef) end
+        end
         if r.defAddr and r.origDefNC then pcall(mwr, "uintptr_t", r.defAddr + OFF.NameContainer, r.origDefNC) end
         if r.skinAddr and r.origSkinNC then pcall(mwr, "uintptr_t", r.skinAddr + OFF.NameContainer, r.origSkinNC) end
     end
@@ -621,17 +629,22 @@ local function applySkinSwapper()
                         pcall(fixDaggersRig, skinModel)
                     end
                     
-                    local origDefSlot = rd(defSlot)
-                    local origSkinSlot = skinSlot and rd(skinSlot) or nil
+                    local origDefInst = rd(defSlot)
+                    local origDefRef = rd(defSlot + 8)
+                    local origSkinInst = skinSlot and rd(skinSlot) or nil
+                    local origSkinRef = skinSlot and rd(skinSlot + 8) or nil
                     local origDefNC = rd(defModel.Address + OFF.NameContainer)
                     local origSkinNC = rd(skinModel.Address + OFF.NameContainer)
                     
-                    registerRestore(defSlot, origDefSlot, defModel.Address, origDefNC, skinSlot, origSkinSlot, skinModel.Address, origSkinNC)
+                    registerRestore(defSlot, origDefInst, origDefRef, defModel.Address, origDefNC, skinSlot, origSkinInst, origSkinRef, skinModel.Address, origSkinNC)
                     
-                    -- Two-Way pointer swap (Weapons gets skinModel, case folder gets defModel)
+                    -- Two-Way pointer swap with full std::shared_ptr control blocks
                     wr(defSlot, skinModel.Address)
-                    if skinSlot then
-                        wr(skinSlot, defModel.Address)
+                    if origSkinRef then wr(defSlot + 8, origSkinRef) end
+                    
+                    if skinSlot and origDefInst then
+                        wr(skinSlot, origDefInst)
+                        if origDefRef then wr(skinSlot + 8, origDefRef) end
                     end
                     
                     -- Two-Way name swap (skinModel named as weapon, defModel named as skin)
@@ -655,7 +668,15 @@ end
 applySkinSwapper()
 pcall(notify, "Rivals Skin Changer Active", "SC", 4)
 
--- Clean up memory on place teardown or disconnect
+-- Clean up memory on place teardown, game exit, or disconnect
+if LP then
+    pcall(function()
+        LP.AncestryChanged:Connect(function()
+            restoreAllMemory()
+        end)
+    end)
+end
+
 if wf then
     pcall(function()
         wf.AncestryChanged:Connect(function()
