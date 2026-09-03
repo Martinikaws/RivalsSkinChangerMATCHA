@@ -411,26 +411,6 @@ local function registerRestore(defSlot, origDefInst, origDefRef, defAddr, origDe
     })
 end
 
-local function safeWrite(addr, val)
-    if not addr or addr == 0 or not val then return end
-    local ok, cur = pcall(mrd, "uintptr_t", addr)
-    if ok and cur ~= nil then
-        pcall(mwr, "uintptr_t", addr, val)
-    end
-end
-
--- Revert pointers on place change or game exit to prevent engine crashes
-local function restoreAllMemory()
-    for _, r in ipairs(memoryRestores) do
-        safeWrite(r.defSlot, r.origDefInst)
-        safeWrite(r.defSlot and (r.defSlot + 8), r.origDefRef)
-        safeWrite(r.skinSlot, r.origSkinInst)
-        safeWrite(r.skinSlot and (r.skinSlot + 8), r.origSkinRef)
-        safeWrite(r.defAddr and (r.defAddr + OFF.NameContainer), r.origDefNC)
-        safeWrite(r.skinAddr and (r.skinAddr + OFF.NameContainer), r.origSkinNC)
-    end
-    memoryRestores = {}
-end
 
 -- Find skin model across asset folders
 local function findSkinModel(skinTarget, weaponName)
@@ -581,65 +561,16 @@ local function rigSkinModel(m)
     end
 end
 
--- Universal ViewModel ModuleScript Swapper
-local function swapViewModelModule(weaponName, skinTarget)
-    local vmMods = LP.PlayerScripts:FindFirstChild("Modules") and LP.PlayerScripts.Modules:FindFirstChild("ViewModels")
-    if not vmMods then return end
-    
-    local defaultMod = vmMods:FindFirstChild(weaponName)
-    if not defaultMod or not defaultMod.Address then return end
-    
-    -- Find skin module inside defaultMod or vmMods
-    local skinMod = defaultMod:FindFirstChild(skinTarget)
-    if not skinMod then
-        for _, sub in ipairs(defaultMod:GetChildren()) do
-            if sub:IsA("ModuleScript") then
-                local sn = skinTarget:lower():gsub("[%s%-_']+", "")
-                local mn = sub.Name:lower():gsub("[%s%-_']+", "")
-                if mn:find(sn) or sn:find(mn) or (skinTarget == "Keylisong" and mn == "balisong") then
-                    skinMod = sub
-                    break
-                end
-            end
-        end
-    end
-    if not skinMod then
-        skinMod = vmMods:FindFirstChild(skinTarget)
-    end
-    
-    if skinMod and skinMod.Address and skinMod ~= defaultMod then
-        local defSlot = findSlotAddressForWeapon(defaultMod, vmMods)
-        local skinSlot = findSlotAddressForWeapon(skinMod, skinMod.Parent)
-        if defSlot then
-            local origDefInst = rd(defSlot)
-            local origDefRef = rd(defSlot + 8)
-            local origSkinInst = skinSlot and rd(skinSlot) or nil
-            local origSkinRef = skinSlot and rd(skinSlot + 8) or nil
-            local origDefNC = rd(defaultMod.Address + OFF.NameContainer)
-            local origSkinNC = rd(skinMod.Address + OFF.NameContainer)
-            
-            registerRestore(defSlot, origDefInst, origDefRef, defaultMod.Address, origDefNC, skinSlot, origSkinInst, origSkinRef, skinMod.Address, origSkinNC)
-            
-            wr(defSlot, skinMod.Address)
-            if origSkinRef then wr(defSlot + 8, origSkinRef) end
-            
-            if skinSlot and origDefInst then
-                wr(skinSlot, origDefInst)
-                if origDefRef then wr(skinSlot + 8, origDefRef) end
-            end
-            
-            wr(skinMod.Address + OFF.NameContainer, origDefNC)
-            if skinSlot then
-                wr(defaultMod.Address + OFF.NameContainer, origSkinNC)
-            end
-        end
-    end
-end
+-- ViewModel module swap disabled: swapping child ModuleScripts into parent vectors
+-- corrupts the Roblox C++ parent-child hierarchy and breaks the Locker GUI.
+-- The 3D model swap alone is sufficient to display the correct skin visuals.
 
 -- Active viewmodel beam and particle FX culler (prevents detached glowing effects while unequipped)
+local _scriptAlive = true
+
 task.spawn(function()
     local rs = game:GetService("ReplicatedStorage")
-    while true do
+    while _scriptAlive do
         task.wait(0.3)
         pcall(function()
             local tempVM = rs:FindFirstChild("Assets") and rs.Assets:FindFirstChild("Temp") and rs.Assets.Temp:FindFirstChild("ViewModels")
@@ -764,7 +695,6 @@ local function applySkinSwapper()
                         wr(defModel.Address + OFF.NameContainer, origSkinNC)
                     end
                     
-                    pcall(swapViewModelModule, weaponName, skinTarget)
                     
                     swappedCount = swappedCount + 1
                 end
@@ -777,39 +707,40 @@ end
 applySkinSwapper()
 pcall(notify, "Rivals Skin Changer Active", "SC", 4)
 
--- Clean up memory on place teardown, game exit, or disconnect
-if LP then
-    pcall(function()
-        LP.AncestryChanged:Connect(function()
-            restoreAllMemory()
+-- Unified cleanup: kill background threads, then restore all memory pointers
+local _cleaned = false
+local function fullCleanup()
+    if _cleaned then return end
+    _cleaned = true
+    _scriptAlive = false  -- stop FX culler and sound callback loops
+    task.wait()           -- yield one frame so loops exit
+    for _, r in ipairs(memoryRestores) do
+        pcall(function()
+            if r.defSlot and r.origDefInst then
+                wr(r.defSlot, r.origDefInst)
+                if r.origDefRef then wr(r.defSlot + 8, r.origDefRef) end
+            end
+            if r.skinSlot and r.origSkinInst then
+                wr(r.skinSlot, r.origSkinInst)
+                if r.origSkinRef then wr(r.skinSlot + 8, r.origSkinRef) end
+            end
+            if r.defAddr and r.origDefNC then wr(r.defAddr + OFF.NameContainer, r.origDefNC) end
+            if r.skinAddr and r.origSkinNC then wr(r.skinAddr + OFF.NameContainer, r.origSkinNC) end
         end)
-    end)
-end
-
-if wf then
-    pcall(function()
-        wf.AncestryChanged:Connect(function()
-            restoreAllMemory()
-        end)
-    end)
-end
-
-local TS = game:GetService("TeleportService")
-if TS then
-    pcall(function()
-        TS.TeleportInit:Connect(function()
-            restoreAllMemory()
-        end)
-        if TS.TeleportProcessing then
-            TS.TeleportProcessing:Connect(function()
-                restoreAllMemory()
-            end)
-        end
-    end)
+    end
+    memoryRestores = {}
 end
 
 pcall(function()
-    game:BindToClose(function()
-        restoreAllMemory()
-    end)
+    LP.AncestryChanged:Connect(function() fullCleanup() end)
+end)
+pcall(function()
+    wf.AncestryChanged:Connect(function() fullCleanup() end)
+end)
+pcall(function()
+    local TS = game:GetService("TeleportService")
+    TS.TeleportInit:Connect(function() fullCleanup() end)
+end)
+pcall(function()
+    game:BindToClose(function() fullCleanup() end)
 end)
