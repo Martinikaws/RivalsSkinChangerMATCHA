@@ -411,19 +411,23 @@ local function registerRestore(defSlot, origDefInst, origDefRef, defAddr, origDe
     })
 end
 
+local function safeWrite(addr, val)
+    if not addr or addr == 0 or not val then return end
+    local ok, cur = pcall(mrd, "uintptr_t", addr)
+    if ok and cur ~= nil then
+        pcall(mwr, "uintptr_t", addr, val)
+    end
+end
+
 -- Revert pointers on place change or game exit to prevent engine crashes
 local function restoreAllMemory()
     for _, r in ipairs(memoryRestores) do
-        if r.defSlot and r.origDefInst then
-            pcall(mwr, "uintptr_t", r.defSlot, r.origDefInst)
-            if r.origDefRef then pcall(mwr, "uintptr_t", r.defSlot + 8, r.origDefRef) end
-        end
-        if r.skinSlot and r.origSkinInst then
-            pcall(mwr, "uintptr_t", r.skinSlot, r.origSkinInst)
-            if r.origSkinRef then pcall(mwr, "uintptr_t", r.skinSlot + 8, r.origSkinRef) end
-        end
-        if r.defAddr and r.origDefNC then pcall(mwr, "uintptr_t", r.defAddr + OFF.NameContainer, r.origDefNC) end
-        if r.skinAddr and r.origSkinNC then pcall(mwr, "uintptr_t", r.skinAddr + OFF.NameContainer, r.origSkinNC) end
+        safeWrite(r.defSlot, r.origDefInst)
+        safeWrite(r.defSlot and (r.defSlot + 8), r.origDefRef)
+        safeWrite(r.skinSlot, r.origSkinInst)
+        safeWrite(r.skinSlot and (r.skinSlot + 8), r.origSkinRef)
+        safeWrite(r.defAddr and (r.defAddr + OFF.NameContainer), r.origDefNC)
+        safeWrite(r.skinAddr and (r.skinAddr + OFF.NameContainer), r.origSkinNC)
     end
     memoryRestores = {}
 end
@@ -450,18 +454,54 @@ local function findSkinModel(skinTarget, weaponName)
     return nil
 end
 
--- Specialized Crossbow arrow rig to satisfy both _Setup and ViewModel logic
-local function fixArrowRig(skinModel)
-    local arrow = skinModel:FindFirstChild("Arrow")
-    if not arrow then return end
-    local children = arrow:GetChildren()
-    if #children >= 1 and children[1].Address then
-        local nc1 = rd(children[1].Address + OFF.NameContainer)
-        if nc1 then pcall(mwr, "string", nc1 + 8, "Primary\0") end
+-- Specialized Crossbow rig to satisfy both _Setup and ViewModel logic
+local function fixCrossbowRig(skinModel)
+    for _, partName in ipairs({"Body", "StringCurve", "Arrow", "Wings1", "Wings2"}) do
+        local sub = skinModel:FindFirstChild(partName)
+        if sub and sub:IsA("Model") then
+            if not sub:FindFirstChild("Primary") then
+                local firstPart = sub:FindFirstChildWhichIsA("BasePart")
+                if firstPart and firstPart.Address then
+                    local nc = rd(firstPart.Address + OFF.NameContainer)
+                    if nc then pcall(mwr, "string", nc + 8, "Primary\0") end
+                    pcall(function() sub.PrimaryPart = firstPart end)
+                end
+            else
+                pcall(function() sub.PrimaryPart = sub.Primary end)
+            end
+        end
     end
-    if #children >= 2 and children[2].Address then
-        local nc2 = rd(children[2].Address + OFF.NameContainer)
-        if nc2 then pcall(mwr, "string", nc2 + 8, "MeshPart\0") end
+    local arrow = skinModel:FindFirstChild("Arrow")
+    if arrow then
+        local children = arrow:GetChildren()
+        if #children >= 1 and children[1].Address then
+            local nc1 = rd(children[1].Address + OFF.NameContainer)
+            if nc1 then pcall(mwr, "string", nc1 + 8, "Primary\0") end
+            pcall(function() arrow.PrimaryPart = children[1] end)
+        end
+        if #children >= 2 and children[2].Address then
+            local nc2 = rd(children[2].Address + OFF.NameContainer)
+            if nc2 then pcall(mwr, "string", nc2 + 8, "MeshPart\0") end
+        end
+    end
+end
+
+-- Specialized Knife / Balisong rig for handle animations
+local function fixKnifeRig(skinModel)
+    for _, partName in ipairs({"Front", "Back", "Body"}) do
+        local sub = skinModel:FindFirstChild(partName)
+        if sub and sub:IsA("Model") then
+            if not sub:FindFirstChild("Primary") then
+                local firstPart = sub:FindFirstChildWhichIsA("BasePart")
+                if firstPart and firstPart.Address then
+                    local nc = rd(firstPart.Address + OFF.NameContainer)
+                    if nc then pcall(mwr, "string", nc + 8, "Primary\0") end
+                    pcall(function() sub.PrimaryPart = firstPart end)
+                end
+            else
+                pcall(function() sub.PrimaryPart = sub.Primary end)
+            end
+        end
     end
 end
 
@@ -541,51 +581,57 @@ local function rigSkinModel(m)
     end
 end
 
--- ViewModel logic module families mapping
-local VM_MODULE_FAMILIES = {
-    ["Crossbow"] = "BaseCrossbow",
-    ["RPG"] = "BaseRPG",
-    ["Bow"] = "BaseBow",
-    ["Satchel"] = "BaseSatchel",
-    ["Chainsaw"] = "BaseChainsaw",
-    ["Daggers"] = "BaseDaggers",
-    ["Slingshot"] = "BaseSlingshot"
-}
-
--- Swap specialized ViewModel ModuleScripts with full 16-byte std::shared_ptr two-way swap
-local function swapViewModelModule(baseFolderName, defaultModName, skinModName)
-    local vmMods = LP.PlayerScripts.Modules:FindFirstChild("ViewModels")
+-- Universal ViewModel ModuleScript Swapper
+local function swapViewModelModule(weaponName, skinTarget)
+    local vmMods = LP.PlayerScripts:FindFirstChild("Modules") and LP.PlayerScripts.Modules:FindFirstChild("ViewModels")
     if not vmMods then return end
-    local baseFolder = vmMods:FindFirstChild(baseFolderName)
-    if not baseFolder then return end
     
-    local defaultMod = baseFolder:FindFirstChild(defaultModName)
-    local skinMod = baseFolder:FindFirstChild(skinModName)
-    if not defaultMod or not skinMod or not defaultMod.Address or not skinMod.Address then return end
+    local defaultMod = vmMods:FindFirstChild(weaponName)
+    if not defaultMod or not defaultMod.Address then return end
     
-    local defSlot = findSlotAddressForWeapon(defaultMod, baseFolder)
-    local skinSlot = findSlotAddressForWeapon(skinMod, baseFolder)
-    if defSlot then
-        local origDefInst = rd(defSlot)
-        local origDefRef = rd(defSlot + 8)
-        local origSkinInst = skinSlot and rd(skinSlot) or nil
-        local origSkinRef = skinSlot and rd(skinSlot + 8) or nil
-        local origDefNC = rd(defaultMod.Address + OFF.NameContainer)
-        local origSkinNC = rd(skinMod.Address + OFF.NameContainer)
-        
-        registerRestore(defSlot, origDefInst, origDefRef, defaultMod.Address, origDefNC, skinSlot, origSkinInst, origSkinRef, skinMod.Address, origSkinNC)
-        
-        wr(defSlot, skinMod.Address)
-        if origSkinRef then wr(defSlot + 8, origSkinRef) end
-        
-        if skinSlot and origDefInst then
-            wr(skinSlot, origDefInst)
-            if origDefRef then wr(skinSlot + 8, origDefRef) end
+    -- Find skin module inside defaultMod or vmMods
+    local skinMod = defaultMod:FindFirstChild(skinTarget)
+    if not skinMod then
+        for _, sub in ipairs(defaultMod:GetChildren()) do
+            if sub:IsA("ModuleScript") then
+                local sn = skinTarget:lower():gsub("[%s%-_']+", "")
+                local mn = sub.Name:lower():gsub("[%s%-_']+", "")
+                if mn:find(sn) or sn:find(mn) or (skinTarget == "Keylisong" and mn == "balisong") then
+                    skinMod = sub
+                    break
+                end
+            end
         end
-        
-        wr(skinMod.Address + OFF.NameContainer, origDefNC)
-        if skinSlot then
-            wr(defaultMod.Address + OFF.NameContainer, origSkinNC)
+    end
+    if not skinMod then
+        skinMod = vmMods:FindFirstChild(skinTarget)
+    end
+    
+    if skinMod and skinMod.Address and skinMod ~= defaultMod then
+        local defSlot = findSlotAddressForWeapon(defaultMod, vmMods)
+        local skinSlot = findSlotAddressForWeapon(skinMod, skinMod.Parent)
+        if defSlot then
+            local origDefInst = rd(defSlot)
+            local origDefRef = rd(defSlot + 8)
+            local origSkinInst = skinSlot and rd(skinSlot) or nil
+            local origSkinRef = skinSlot and rd(skinSlot + 8) or nil
+            local origDefNC = rd(defaultMod.Address + OFF.NameContainer)
+            local origSkinNC = rd(skinMod.Address + OFF.NameContainer)
+            
+            registerRestore(defSlot, origDefInst, origDefRef, defaultMod.Address, origDefNC, skinSlot, origSkinInst, origSkinRef, skinMod.Address, origSkinNC)
+            
+            wr(defSlot, skinMod.Address)
+            if origSkinRef then wr(defSlot + 8, origSkinRef) end
+            
+            if skinSlot and origDefInst then
+                wr(skinSlot, origDefInst)
+                if origDefRef then wr(skinSlot + 8, origDefRef) end
+            end
+            
+            wr(skinMod.Address + OFF.NameContainer, origDefNC)
+            if skinSlot then
+                wr(defaultMod.Address + OFF.NameContainer, origSkinNC)
+            end
         end
     end
 end
@@ -687,7 +733,9 @@ local function applySkinSwapper()
                 if defSlot then
                     rigSkinModel(skinModel)
                     if weaponName == "Crossbow" or skinTarget:find("Crossbow") or skinTarget:find("Bow") then
-                        pcall(fixArrowRig, skinModel)
+                        pcall(fixCrossbowRig, skinModel)
+                    elseif weaponName == "Knife" or skinTarget:find("Knife") or skinTarget:find("lisong") then
+                        pcall(fixKnifeRig, skinModel)
                     elseif weaponName == "Daggers" or skinTarget:find("Daggers") or skinTarget:find("Kunai") then
                         pcall(fixDaggersRig, skinModel)
                     end
@@ -716,9 +764,7 @@ local function applySkinSwapper()
                         wr(defModel.Address + OFF.NameContainer, origSkinNC)
                     end
                     
-                    if VM_MODULE_FAMILIES[weaponName] then
-                        pcall(swapViewModelModule, VM_MODULE_FAMILIES[weaponName], weaponName, skinTarget)
-                    end
+                    pcall(swapViewModelModule, weaponName, skinTarget)
                     
                     swappedCount = swappedCount + 1
                 end
