@@ -429,11 +429,17 @@ local function restoreAllMemory()
 end
 
 -- Find skin model across asset folders
-local function findSkinModel(skinTarget)
+local function findSkinModel(skinTarget, weaponName)
     if EXACT_SKIN_MAP[skinTarget] then
         local f = vm:FindFirstChild(EXACT_SKIN_MAP[skinTarget].folder)
-        local m = f and f:FindFirstChild(EXACT_SKIN_MAP[skinTarget].name)
-        if m then return m end
+        if f then
+            local m = f:FindFirstChild(EXACT_SKIN_MAP[skinTarget].name)
+            if m then return m end
+            if weaponName and f ~= wf then
+                local prev = f:FindFirstChild(weaponName)
+                if prev then return prev end
+            end
+        end
     end
     for _, folder in ipairs(vm:GetChildren()) do
         if folder:IsA("Folder") and folder.Name ~= "Weapons" then
@@ -672,7 +678,7 @@ local function applySkinSwapper()
             local skinTarget = l:sub(q + 1):match("^%s*(.-)%s*$")
             
             local defModel = wf:FindFirstChild(weaponName)
-            local skinModel = findSkinModel(skinTarget)
+            local skinModel = findSkinModel(skinTarget, weaponName)
             
             if defModel and skinModel and defModel.Address and skinModel.Address then
                 local defSlot = findSlotAddressForWeapon(defModel, wf)
