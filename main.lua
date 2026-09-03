@@ -516,20 +516,20 @@ local function rigSkinModel(m)
         pcall(function() m.PrimaryPart = m:FindFirstChildWhichIsA("BasePart", true) end)
     end
     
-    -- Hide extraneous decorative parts, dummy limbs, inspect props, and floating items
+    -- Rename extraneous decorative parts, dummy limbs, inspect props, and floating items to _fake
+    -- ClientViewModel._Setup natively calls v253:Destroy() on any submodel named _fake
     for _, c in ipairs(m:GetChildren()) do
         local n = c.Name:lower()
-        if n:find("leg") or n:find("shell") or n:find("%.r") or n:find("%.l") or n == "_fake"
+        if n:find("leg") or n:find("shell") or n:find("%.r") or n:find("%.l")
            or n:find("arm") or n:find("sleeve") or n:find("juggle")
            or n:find("watermelon") or n:find("banana") or n:find("apple")
            or n:find("fruit") then
-            for _, desc in ipairs(c:GetDescendants()) do
-                if desc.Address then
-                    pcall(mwr, "float", desc.Address + OFF.Transparency, 1.0)
+            if c:IsA("Model") and c.Address then
+                local nc = rd(c.Address + OFF.NameContainer)
+                if nc and nc ~= 0 then
+                    pcall(mwr, "string", nc + 8, "_fake\0")
+                    pcall(mwr, "uint32_t", nc + 24, 5)
                 end
-            end
-            if c:IsA("BasePart") and c.Address then
-                pcall(mwr, "float", c.Address + OFF.Transparency, 1.0)
             end
         end
     end
