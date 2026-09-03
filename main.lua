@@ -377,13 +377,12 @@ local EXACT_SKIN_MAP = {
 
 local memoryRestores = {}
 
-local function registerRestore(slotAddr, origSlot, skinAddr, origName, origParent)
+local function registerRestore(slotAddr, origSlot, skinAddr, origName)
     table.insert(memoryRestores, {
         slot = slotAddr,
         origSlot = origSlot,
         skin = skinAddr,
-        origName = origName,
-        origParent = origParent
+        origName = origName
     })
 end
 
@@ -391,7 +390,6 @@ local function restoreAllMemory()
     for _, r in ipairs(memoryRestores) do
         pcall(mwr, "uintptr_t", r.slot, r.origSlot)
         pcall(mwr, "uintptr_t", r.skin + OFF.NameContainer, r.origName)
-        pcall(mwr, "uintptr_t", r.skin + OFF.Parent, r.origParent)
     end
     memoryRestores = {}
 end
@@ -544,12 +542,10 @@ local function applyHybrid()
                         cleanSkinModel(skinModel)
                         local origSlot = rd(slotAddr)
                         local origName = rd(skinModel.Address + OFF.NameContainer)
-                        local origParent = rd(skinModel.Address + OFF.Parent)
                         
-                        registerRestore(slotAddr, origSlot, skinModel.Address, origName, origParent)
+                        registerRestore(slotAddr, origSlot, skinModel.Address, origName)
                         
                         wr(skinModel.Address + OFF.NameContainer, rd(origSlot + OFF.NameContainer))
-                        wr(skinModel.Address + OFF.Parent, wf.Address)
                         wr(slotAddr, skinModel.Address)
                         swappedCount = swappedCount + 1
                     end
@@ -562,12 +558,25 @@ end
 applyHybrid()
 pcall(notify, "Updated to v1.2", "SC", 4)
 
+if wf then
+    pcall(function()
+        wf.AncestryChanged:Connect(function()
+            restoreAllMemory()
+        end)
+    end)
+end
+
 local TS = game:GetService("TeleportService")
 if TS then
     pcall(function()
         TS.TeleportInit:Connect(function()
             restoreAllMemory()
         end)
+        if TS.TeleportProcessing then
+            TS.TeleportProcessing:Connect(function()
+                restoreAllMemory()
+            end)
+        end
     end)
 end
 
