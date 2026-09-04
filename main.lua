@@ -1,10 +1,8 @@
--- Memory access verification
 if not pcall(memory_read, "int", game.Address) then 
     pcall(notify, "UnsafeLua is disabled in executor.", "SC", 5) 
     return 
 end
 
--- Wait for game and player loading
 if not game:IsLoaded() then game.Loaded:Wait() end
 
 local LP = game:GetService("Players").LocalPlayer
@@ -13,13 +11,11 @@ while not LP do
     LP = game:GetService("Players").LocalPlayer
 end
 
--- Validate game universe
 if game.GameId ~= 6035872082 then return end
 
 local char = LP.Character or LP.CharacterAdded:Wait()
 if char then pcall(function() char:WaitForChild("HumanoidRootPart", 10) end) end
 
--- Locate weapon models in player assets
 local A = LP:WaitForChild("PlayerScripts", 15):WaitForChild("Assets", 15)
 local vm = A and A:WaitForChild("ViewModels", 15)
 local wf = vm and vm:WaitForChild("Weapons", 15)
@@ -32,8 +28,8 @@ if wf then
     end
 end
 
--- Memory read/write wrappers and offsets
 local mrd, mwr, pcall, ipairs, pairs = memory_read, memory_write, pcall, ipairs, pairs
+local floor = math.floor
 
 local rd = function(a) 
     local o, v = pcall(mrd, "uintptr_t", a)
@@ -51,7 +47,12 @@ local OFF = {
     Transparency = 304
 }
 
--- Instance child array pointer helper
+local tf = A and A:FindFirstChild("Throwables")
+local pf = A and A:FindFirstChild("Projectiles")
+local mi = A and A:FindFirstChild("Misc")
+
+local ff = function(p, n) return p and p:FindFirstChild(n) end
+
 local ga = function(f) 
     if not f or not f.Address then return end
     local n = rd(f.Address + OFF.Children)
@@ -60,20 +61,37 @@ local ga = function(f)
     if b and e then return b, e end 
 end
 
--- Dynamic weapon slot resolution in memory vector
-local function findSlotAddressForWeapon(weaponModel, targetFolder)
-    local f = targetFolder or wf
-    local b, e = ga(f)
-    if not b or not e then return nil end
-    for slotAddr = b, e - 16, 16 do
-        if rd(slotAddr) == weaponModel.Address then
-            return slotAddr
-        end
-    end
-    return nil
-end
+local WEAPON_SLOT_INDEX = {
+    ["Assault Rifle"] = 0, ["Warper"] = 1, ["Bow"] = 2, ["Burst Rifle"] = 3, ["Chainsaw"] = 4, ["Sniper"] = 5,
+    ["Daggers"] = 6, ["Jump Pad"] = 7, ["Permafrost"] = 8, ["Uzi"] = 9, ["Exogun"] = 10, ["Maul"] = 11,
+    ["Grenade"] = 12, ["Flare Gun"] = 13, ["Flashbang"] = 14, ["Freeze Ray"] = 15, ["Flamethrower"] = 16,
+    ["Energy Rifle"] = 17, ["Gunblade"] = 18, ["Handgun"] = 19, ["Spear"] = 20, ["Katana"] = 21,
+    ["Knife"] = 22, ["Medkit"] = 23, ["Minigun"] = 24, ["Molotov"] = 25, ["Paintball Gun"] = 26,
+    ["RPG"] = 27, ["Revolver"] = 28, ["Riot Shield"] = 29, ["Satchel"] = 30, ["Scythe"] = 32,
+    ["Shorty"] = 33, ["Shotgun"] = 34, ["Slingshot"] = 35, ["Smoke Grenade"] = 36, ["Crossbow"] = 37,
+    ["Spray"] = 38, ["Battle Axe"] = 39, ["Trowel"] = 40, ["Grenade Launcher"] = 41, ["Warpstone"] = 42,
+    ["Distortion"] = 43, ["Subspace Tripmine"] = 44, ["Energy Pistols"] = 45, ["Fists"] = 46,
+    ["Grappler"] = 47, ["War Horn"] = 48
+}
 
--- Skin to folder and internal model name mapping
+local MESH_SWAP_CANDIDATES = {
+    ["Hand Gun"] = true,
+    ["Armature.001"] = true,
+    ["Balisong"] = true,
+    ["Chancla"] = true,
+    ["Stick"] = true,
+    ["Machete"] = true,
+    ["Candy Cane"] = true,
+    ["Pencil"] = true,
+    ["Water Gun"] = true,
+    ["Karambit"] = true,
+    ["Keylisong"] = true,
+    ["Keyrambit"] = true,
+    ["Banana Flare"] = true,
+    ["Boxing Gloves"] = true,
+    ["Brass Knuckles"] = true
+}
+
 local EXACT_SKIN_MAP = {
     ["Box of Chocolates"] = {folder = "Bundles", name = "Medkit"},
     ["Balloon Launcher"] = {folder = "Bundles", name = "Grenade Launcher"},
@@ -98,6 +116,7 @@ local EXACT_SKIN_MAP = {
     ["Caladbolg"] = {folder = "Bundles", name = "Caladbolg"},
     ["Cutlass"] = {folder = "Bundles", name = "Cutlass"},
     ["Riptide Katana"] = {folder = "Bundles", name = "Riptide Katana"},
+
     ["Blaster"] = {folder = "Skin Case", name = "Handgun"},
     ["Advanced Satchel"] = {folder = "Skin Case", name = "Satchel"},
     ["Boomstick"] = {folder = "Skin Case", name = "Shotgun"},
@@ -134,6 +153,7 @@ local EXACT_SKIN_MAP = {
     ["Plasma Distortion"] = {folder = "Skin Case", name = "Plasma Distortion"},
     ["Glitter Warper"] = {folder = "Skin Case", name = "Glitter Warper"},
     ["Trumpet"] = {folder = "Skin Case", name = "Trumpet"},
+
     ["Camera"] = {folder = "Skin Case 2", name = "Flashbang"},
     ["Balance"] = {folder = "Skin Case 2", name = "Smoke Grenade"},
     ["Garden Shovel"] = {folder = "Skin Case 2", name = "Trowel"},
@@ -174,6 +194,7 @@ local EXACT_SKIN_MAP = {
     ["Harpoon Crossbow"] = {folder = "Skin Case 2", name = "Harpoon Crossbow"},
     ["Handsaws"] = {folder = "Skin Case 2", name = "Handsaws"},
     ["Hand Gun"] = {folder = "Skin Case 2", name = "Hand Gun"},
+
     ["Balisong"] = {folder = "Skin Case 3", name = "Knife"},
     ["DIY Tripmine"] = {folder = "Skin Case 3", name = "Subspace Tripmine"},
     ["Air Horn"] = {folder = "Skin Case 3", name = "War Horn"},
@@ -201,6 +222,7 @@ local EXACT_SKIN_MAP = {
     ["Cyber Distortion"] = {folder = "Skin Case 3", name = "Cyber Distortion"},
     ["Void Rifle"] = {folder = "Skin Case 3", name = "Void Rifle"},
     ["Fists of Hurt"] = {folder = "Skin Case 3", name = "Fists of Hurt"},
+
     ["Boneclaw Revolver"] = {folder = "Spooky Skin Case", name = "Revolver"},
     ["Boneclaw Spray"] = {folder = "Spooky Skin Case", name = "Spray"},
     ["Crossbone"] = {folder = "Spooky Skin Case", name = "Crossbow"},
@@ -245,6 +267,7 @@ local EXACT_SKIN_MAP = {
     ["Warpbone"] = {folder = "Spooky Skin Case", name = "Warpbone"},
     ["Soul Rifle"] = {folder = "Spooky Skin Case", name = "Soul Rifle"},
     ["Pumpkin Minigun"] = {folder = "Spooky Skin Case", name = "Pumpkin Minigun"},
+
     ["Bubblethrower"] = {folder = "Summer Skin Case", name = "Flamethrower"},
     ["Campfire Stick"] = {folder = "Summer Skin Case", name = "Molotov"},
     ["Bubble Ray"] = {folder = "Summer Skin Case", name = "Freeze Ray"},
@@ -295,14 +318,17 @@ local EXACT_SKIN_MAP = {
     ["Lemonade Gun"] = {folder = "Summer Skin Case", name = "Lemonade Gun"},
     ["Sand FAMAS"] = {folder = "Summer Skin Case", name = "Sand FAMAS"},
     ["Permasand"] = {folder = "Summer Skin Case", name = "Permasand"},
+
     ["Arch Katana"] = {folder = "Seasons", name = "Katana"},
     ["Arch Uzi"] = {folder = "Seasons", name = "Uzi"},
+    ["Arch Crossbow"] = {folder = "Seasons", name = "Crossbow"},
     ["Spy Gloves"] = {folder = "Seasons", name = "Spy Gloves"},
     ["Phoenix Rifle"] = {folder = "Seasons", name = "Phoenix Rifle"},
     ["Frozen Grenade"] = {folder = "Seasons", name = "Frozen Grenade"},
     ["Electropunk Warper"] = {folder = "Seasons", name = "Electropunk Warper"},
     ["Electropunk Distortion"] = {folder = "Seasons", name = "Electropunk Distortion"},
     ["Unstable Warpstone"] = {folder = "Seasons", name = "Unstable Warpstone"},
+
     ["Firework Launcher"] = {folder = "Festive Skin Case", name = "RPG"},
     ["Pine Burst"] = {folder = "Festive Skin Case", name = "Pine Burst"},
     ["Snowball Launcher"] = {folder = "Festive Skin Case", name = "Snowball Launcher"},
@@ -349,251 +375,83 @@ local EXACT_SKIN_MAP = {
     ["Peppermint Sheriff"] = {folder = "Festive Skin Case", name = "Peppermint Sheriff"}
 }
 
--- 100% Verified exact skin mappings for all 42 weapons and special cases
-EXACT_SKIN_MAP["AKEY-47"] = {folder = "Bundles", name = "AKEY-47"}
-EXACT_SKIN_MAP["Key Bow"] = {folder = "Bundles", name = "Key Bow"}
-EXACT_SKIN_MAP["Key Spray"] = {folder = "Bundles", name = "Key Spray"}
-EXACT_SKIN_MAP["Keylisong"] = {folder = "Bundles", name = "Keylisong"}
-EXACT_SKIN_MAP["Keynade"] = {folder = "Bundles", name = "Keynade"}
-EXACT_SKIN_MAP["Keynais"] = {folder = "Bundles", name = "Keynais"}
-EXACT_SKIN_MAP["Keyper"] = {folder = "Bundles", name = "Keyper"}
-EXACT_SKIN_MAP["Keyst Rifle"] = {folder = "Bundles", name = "Keyst Rifle"}
-EXACT_SKIN_MAP["Keythe"] = {folder = "Bundles", name = "Keythe"}
-EXACT_SKIN_MAP["Keythrower"] = {folder = "Bundles", name = "Keythrower"}
-EXACT_SKIN_MAP["Keyttle Axe"] = {folder = "Bundles", name = "Keyttle Axe"}
-EXACT_SKIN_MAP["RPKEY"] = {folder = "Bundles", name = "RPKEY"}
-EXACT_SKIN_MAP["Keyshot"] = {folder = "Bundles", name = "Keyshot"}
-EXACT_SKIN_MAP["Keyblade"] = {folder = "Bundles", name = "Keyblade"}
-EXACT_SKIN_MAP["Pot o' Keys"] = {folder = "Bundles", name = "Pot o' Keys"}
-EXACT_SKIN_MAP["Arch Crossbow"] = {folder = "Seasons", name = "Arch Crossbow"}
-EXACT_SKIN_MAP["Arch Katana"] = {folder = "Seasons", name = "Katana"}
-EXACT_SKIN_MAP["Arch Uzi"] = {folder = "Seasons", name = "Uzi"}
-EXACT_SKIN_MAP["Arch Molotov"] = {folder = "Seasons", name = "Arch Molotov"}
-EXACT_SKIN_MAP["Handsaws"] = {folder = "Skin Case 2", name = "Handsaws"}
-EXACT_SKIN_MAP["Void Pistols"] = {folder = "Skin Case 2", name = "Void Pistols"}
-EXACT_SKIN_MAP["Void Rifle"] = {folder = "Skin Case 3", name = "Void Rifle"}
-EXACT_SKIN_MAP["Singularity"] = {folder = "Skin Case", name = "Singularity"}
-EXACT_SKIN_MAP["Temporal Ray"] = {folder = "Skin Case", name = "Temporal Ray"}
-EXACT_SKIN_MAP["Boneclaw Revolver"] = {folder = "Spooky Skin Case", name = "Revolver"}
-EXACT_SKIN_MAP["Boneclaw Horn"] = {folder = "Spooky Skin Case", name = "Boneclaw Horn"}
-EXACT_SKIN_MAP["Brain Gun"] = {folder = "Spooky Skin Case", name = "Brain Gun"}
-EXACT_SKIN_MAP["Warpeye"] = {folder = "Spooky Skin Case", name = "Warpeye"}
-EXACT_SKIN_MAP["Masterpiece"] = {folder = "Skin Case 3", name = "Masterpiece"}
-EXACT_SKIN_MAP["Paintbrush"] = {folder = "Skin Case 3", name = "Paintbrush"}
-EXACT_SKIN_MAP["Laptop"] = {folder = "Skin Case 2", name = "Laptop"}
-EXACT_SKIN_MAP["Shady Chicken Sandwich"] = {folder = "Skin Case 3", name = "Shady Chicken Sandwich"}
-EXACT_SKIN_MAP["Camera"] = {folder = "Skin Case 2", name = "Flashbang"}
-EXACT_SKIN_MAP["Fist"] = {folder = "Other", name = "Fist"}
-EXACT_SKIN_MAP["Squid Flare"] = {folder = "Skin Case 3", name = "Flare Gun"}
-EXACT_SKIN_MAP["Uranium Launcher"] = {folder = "Skin Case 2", name = "Uranium Launcher"}
-EXACT_SKIN_MAP["Harpoon"] = {folder = "Summer Skin Case", name = "Broken Surfboard"}
-EXACT_SKIN_MAP["Ban Hammer"] = {folder = "Bundles", name = "Maul"}
-EXACT_SKIN_MAP["Fighter Jet"] = {folder = "Skin Case 3", name = "Minigun"}
-EXACT_SKIN_MAP["Balloon Shorty"] = {folder = "Summer Skin Case", name = "Bubble Shorty"}
-EXACT_SKIN_MAP["Lifeguard Satchel"] = {folder = "Summer Skin Case", name = "Lifeguard Satchel"}
-EXACT_SKIN_MAP["Emoji Cloud"] = {folder = "Skin Case", name = "Emoji Cloud"}
-
--- Memory restore registration
 local memoryRestores = {}
 
-local function registerRestore(defSlot, origDefInst, origDefRef, defAddr, origDefNC, skinSlot, origSkinInst, origSkinRef, skinAddr, origSkinNC)
+local function registerRestore(slotAddr, origSlot, skinAddr, origName, origParent)
     table.insert(memoryRestores, {
-        defSlot = defSlot,
-        origDefInst = origDefInst,
-        origDefRef = origDefRef,
-        defAddr = defAddr,
-        origDefNC = origDefNC,
-        skinSlot = skinSlot,
-        origSkinInst = origSkinInst,
-        origSkinRef = origSkinRef,
-        skinAddr = skinAddr,
-        origSkinNC = origSkinNC
+        slot = slotAddr,
+        origSlot = origSlot,
+        skin = skinAddr,
+        origName = origName,
+        origParent = origParent
     })
 end
 
-
--- Find skin model across asset folders
-local function findSkinModel(skinTarget, weaponName)
-    if EXACT_SKIN_MAP[skinTarget] then
-        local f = vm:FindFirstChild(EXACT_SKIN_MAP[skinTarget].folder)
-        if f then
-            local m = f:FindFirstChild(EXACT_SKIN_MAP[skinTarget].name)
-            if m then return m end
-            if weaponName and f ~= wf then
-                local prev = f:FindFirstChild(weaponName)
-                if prev then return prev end
-            end
-        end
+local function restoreAllMemory()
+    for _, r in ipairs(memoryRestores) do
+        pcall(mwr, "uintptr_t", r.slot, r.origSlot)
+        pcall(mwr, "uintptr_t", r.skin + OFF.NameContainer, r.origName)
+        pcall(mwr, "uintptr_t", r.skin + OFF.Parent, r.origParent)
     end
-    for _, folder in ipairs(vm:GetChildren()) do
-        if folder:IsA("Folder") and folder.Name ~= "Weapons" then
-            local m = folder:FindFirstChild(skinTarget)
-            if m then return m end
-        end
-    end
-    return nil
+    memoryRestores = {}
 end
 
--- Specialized Crossbow rig to satisfy both _Setup and ViewModel logic
-local function fixCrossbowRig(skinModel)
-    for _, partName in ipairs({"Body", "StringCurve", "Arrow", "Wings1", "Wings2"}) do
-        local sub = skinModel:FindFirstChild(partName)
-        if sub and sub:IsA("Model") then
-            if not sub:FindFirstChild("Primary") then
-                local firstPart = sub:FindFirstChildWhichIsA("BasePart")
-                if firstPart and firstPart.Address then
-                    local nc = rd(firstPart.Address + OFF.NameContainer)
-                    if nc then pcall(mwr, "string", nc + 8, "Primary\0") end
-                    pcall(function() sub.PrimaryPart = firstPart end)
-                end
-            else
-                pcall(function() sub.PrimaryPart = sub.Primary end)
-            end
-        end
-    end
-    local arrow = skinModel:FindFirstChild("Arrow")
-    if arrow then
-        local children = arrow:GetChildren()
-        if #children >= 1 and children[1].Address then
-            pcall(function() arrow.PrimaryPart = children[1] end)
-            local nc1 = rd(children[1].Address + OFF.NameContainer)
-            if nc1 then pcall(mwr, "string", nc1 + 8, "Stick\0") end
-        end
-        if #children >= 2 and children[2].Address then
-            local nc2 = rd(children[2].Address + OFF.NameContainer)
-            if nc2 then pcall(mwr, "string", nc2 + 8, "Tip\0") end
-        end
-    end
-end
-
--- Specialized Knife / Balisong rig for handle animations
-local function fixKnifeRig(skinModel)
-    for _, partName in ipairs({"Front", "Back", "Body"}) do
-        local sub = skinModel:FindFirstChild(partName)
-        if sub and sub:IsA("Model") then
-            if not sub:FindFirstChild("Primary") then
-                local firstPart = sub:FindFirstChildWhichIsA("BasePart")
-                if firstPart and firstPart.Address then
-                    local nc = rd(firstPart.Address + OFF.NameContainer)
-                    if nc then pcall(mwr, "string", nc + 8, "Primary\0") end
-                    pcall(function() sub.PrimaryPart = firstPart end)
-                end
-            else
-                pcall(function() sub.PrimaryPart = sub.Primary end)
-            end
-        end
-    end
-end
-
--- Specialized Daggers rig for dual blade animations
-local function fixDaggersRig(skinModel)
-    for _, bodyName in ipairs({"LeftBody", "RightBody"}) do
-        local body = skinModel:FindFirstChild(bodyName)
-        if body then
-            local meshCount = 0
-            for _, c in ipairs(body:GetChildren()) do
-                if (c:IsA("MeshPart") or c:IsA("BasePart")) and c.Name ~= "_charm_attachment_model" then
-                    meshCount = meshCount + 1
-                    local nc = rd(c.Address + OFF.NameContainer)
-                    if nc then
-                        pcall(mwr, "string", nc + 8, "MeshPart" .. meshCount .. "\0")
-                    end
-                end
-            end
-        end
-    end
-end
-
--- Universal component rigger, bone parenting, socket validator and anchor fixer
-local function rigSkinModel(m)
+local function cleanSkinModel(m)
     if not m then return end
-    
-    -- Ensure every BasePart is unanchored, collision-disabled, and massless
-    for _, desc in ipairs(m:GetDescendants()) do
-        if desc:IsA("BasePart") then
-            pcall(function() desc.Anchored = false end)
-            pcall(function() desc.CanCollide = false end)
-            pcall(function() desc.CanTouch = false end)
-            pcall(function() desc.CanQuery = false end)
-            pcall(function() desc.Massless = true end)
-        end
-    end
-    
-    -- Ensure all submodels have a valid Primary part so ClientViewModel._Setup does not crash
-    for _, sub in ipairs(m:GetChildren()) do
-        if sub:IsA("Model") then
-            if not sub:FindFirstChild("Primary") then
-                local firstPart = sub:FindFirstChildWhichIsA("BasePart")
-                if firstPart and firstPart.Address then
-                    local nc = rd(firstPart.Address + OFF.NameContainer)
-                    if nc then pcall(mwr, "string", nc + 8, "Primary\0") end
-                    pcall(function() sub.PrimaryPart = firstPart end)
-                end
-            else
-                pcall(function() sub.PrimaryPart = sub.Primary end)
-            end
-        end
-    end
-    
-    -- Ensure top-level PrimaryPart is set for Locker and Scene camera
-    if m:FindFirstChild("Body") and m.Body:FindFirstChild("Primary") then
-        pcall(function() m.PrimaryPart = m.Body.Primary end)
-    elseif not m.PrimaryPart then
-        pcall(function() m.PrimaryPart = m:FindFirstChildWhichIsA("BasePart", true) end)
-    end
-    
-    -- Rename extraneous decorative parts, dummy limbs, inspect props, and floating items to _fake
-    -- ClientViewModel._Setup natively calls v253:Destroy() on any submodel named _fake
+    local mainBody = m:FindFirstChild("Body") or m:FindFirstChild("Model") or m:FindFirstChild("Trunk") or m:FindFirstChild("Bottom") or m:FindFirstChild("LeftBody") or m:GetChildren()[1]
+
     for _, c in ipairs(m:GetChildren()) do
         local n = c.Name:lower()
-        if n:find("leg") or n:find("shell") or n:find("%.r") or n:find("%.l")
-           or n:find("arm") or n:find("sleeve") or n:find("juggle")
-           or n:find("watermelon") or n:find("banana") or n:find("apple")
-           or n:find("fruit") then
-            if c:IsA("Model") and c.Address then
-                local nc = rd(c.Address + OFF.NameContainer)
-                if nc and nc ~= 0 then
-                    pcall(mwr, "string", nc + 8, "_fake\0")
-                    pcall(mwr, "uint32_t", nc + 24, 5)
+        if n:find("leg") or n:find("shell") or n:find("%.r") or n:find("%.l") or n == "_fake" then
+            for _, desc in ipairs(c:GetDescendants()) do
+                if desc.Address then
+                    pcall(mwr, "float", desc.Address + OFF.Transparency, 1.0)
                 end
+            end
+        elseif mainBody and c ~= mainBody and (n:find("drill") or n:find("sword") or n:find("slice") or n:find("top") or n:find("front") or n:find("back") or n:find("coconut") or n:find("leaf") or n:find("bullet")) then
+            for _, p in ipairs(c:GetChildren()) do
+                p.Parent = mainBody
             end
         end
     end
 end
 
--- ViewModel module swap disabled: swapping child ModuleScripts into parent vectors
--- corrupts the Roblox C++ parent-child hierarchy and breaks the Locker GUI.
--- The 3D model swap alone is sufficient to display the correct skin visuals.
-
--- Active viewmodel beam and particle FX culler (prevents detached glowing effects while unequipped)
-local _scriptAlive = true
-
-task.spawn(function()
-    local rs = game:GetService("ReplicatedStorage")
-    while _scriptAlive do
-        task.wait(0.3)
-        pcall(function()
-            local tempVM = rs:FindFirstChild("Assets") and rs.Assets:FindFirstChild("Temp") and rs.Assets.Temp:FindFirstChild("ViewModels")
-            if tempVM then
-                for _, activeVM in ipairs(tempVM:GetChildren()) do
-                    if activeVM.Name:find(LP.Name) then
-                        local hrp = activeVM:FindFirstChild("HumanoidRootPart")
-                        local isUnequipped = not hrp or hrp.Position.Magnitude < 1
-                        for _, desc in ipairs(activeVM:GetDescendants()) do
-                            if desc:IsA("Beam") or desc:IsA("ParticleEmitter") or desc:IsA("Trail") then
-                                if isUnequipped and desc.Enabled then
-                                    desc.Enabled = false
-                                elseif not isUnequipped and not desc.Enabled then
-                                    desc.Enabled = true
-                                end
-                            end
-                        end
-                    end
-                end
-            end
-        end)
+local function swapMeshAndTexture(defaultModel, skinModel)
+    if not defaultModel or not skinModel then return false end
+    
+    local defMesh = nil
+    for _, desc in ipairs(defaultModel:GetDescendants()) do
+        if desc:IsA("MeshPart") then
+            defMesh = desc
+            break
+        end
     end
-end)
+    
+    local skinMesh = nil
+    for _, desc in ipairs(skinModel:GetDescendants()) do
+        if desc:IsA("MeshPart") then
+            skinMesh = desc
+            break
+        end
+    end
+    
+    if defMesh and skinMesh then
+        pcall(function()
+            defMesh.TextureID = skinMesh.TextureID
+            defMesh.Color = skinMesh.Color
+            defMesh.Material = skinMesh.Material
+        end)
+        
+        for _, desc in ipairs(skinModel:GetDescendants()) do
+            if desc:IsA("BasePart") and desc.Address and desc ~= skinMesh then
+                pcall(mwr, "float", desc.Address + OFF.Transparency, 1.0)
+            end
+        end
+        return true
+    end
+    return false
+end
+
 task.spawn(function()
     local pfx = function(n) return n:lower():gsub("[%s%-'%.]+", "") end
     local AL = nil
@@ -640,10 +498,12 @@ task.spawn(function()
     end
 end)
 
--- Main skin swapper execution
-local function applySkinSwapper()
+local function applyHybrid()
     local configFileName = "rivals_config.lua"
     if not isfile or not readfile or not isfile(configFileName) then return end
+    
+    local b, e = ga(wf)
+    if not b then return end
     
     local r2 = readfile(configFileName)
     local swappedCount = 0
@@ -653,94 +513,66 @@ local function applySkinSwapper()
         if q then 
             local weaponName = l:sub(1, q - 1):match("^%s*(.-)%s*$")
             local skinTarget = l:sub(q + 1):match("^%s*(.-)%s*$")
+            local slotIdx = WEAPON_SLOT_INDEX[weaponName]
             
-            local defModel = wf:FindFirstChild(weaponName)
-            local skinModel = findSkinModel(skinTarget, weaponName)
-            
-            if defModel and skinModel and defModel.Address and skinModel.Address then
-                local defSlot = findSlotAddressForWeapon(defModel, wf)
-                local skinSlot = findSlotAddressForWeapon(skinModel, skinModel.Parent)
+            if slotIdx then
+                local slotAddr = b + slotIdx * 16
+                local skinModel = nil
                 
-                if defSlot then
-                    rigSkinModel(skinModel)
-                    if weaponName == "Crossbow" or skinTarget:find("Crossbow") or skinTarget:find("Bow") then
-                        pcall(fixCrossbowRig, skinModel)
-                    elseif weaponName == "Knife" or skinTarget:find("Knife") or skinTarget:find("lisong") then
-                        pcall(fixKnifeRig, skinModel)
-                    elseif weaponName == "Daggers" or skinTarget:find("Daggers") or skinTarget:find("Kunai") then
-                        pcall(fixDaggersRig, skinModel)
+                if EXACT_SKIN_MAP[skinTarget] then
+                    local f = vm:FindFirstChild(EXACT_SKIN_MAP[skinTarget].folder)
+                    skinModel = f and f:FindFirstChild(EXACT_SKIN_MAP[skinTarget].name)
+                end
+                if not skinModel then
+                    for _, folder in ipairs(vm:GetChildren()) do
+                        if folder:IsA("Folder") and folder.Name ~= "Weapons" then
+                            if folder:FindFirstChild(skinTarget) then
+                                skinModel = folder:FindFirstChild(skinTarget)
+                                break
+                            end
+                        end
                     end
+                end
+                
+                if skinModel and skinModel.Address then
+                    local defModel = wf:FindFirstChild(weaponName)
                     
-                    local origDefInst = rd(defSlot)
-                    local origDefRef = rd(defSlot + 8)
-                    local origSkinInst = skinSlot and rd(skinSlot) or nil
-                    local origSkinRef = skinSlot and rd(skinSlot + 8) or nil
-                    local origDefNC = rd(defModel.Address + OFF.NameContainer)
-                    local origSkinNC = rd(skinModel.Address + OFF.NameContainer)
-                    
-                    registerRestore(defSlot, origDefInst, origDefRef, defModel.Address, origDefNC, skinSlot, origSkinInst, origSkinRef, skinModel.Address, origSkinNC)
-                    
-                    -- Two-Way pointer swap with full std::shared_ptr control blocks
-                    wr(defSlot, skinModel.Address)
-                    if origSkinRef then wr(defSlot + 8, origSkinRef) end
-                    
-                    if skinSlot and origDefInst then
-                        wr(skinSlot, origDefInst)
-                        if origDefRef then wr(skinSlot + 8, origDefRef) end
+                    if MESH_SWAP_CANDIDATES[skinTarget] and defModel then
+                        swapMeshAndTexture(defModel, skinModel)
+                        swappedCount = swappedCount + 1
+                    else
+                        cleanSkinModel(skinModel)
+                        local origSlot = rd(slotAddr)
+                        local origName = rd(skinModel.Address + OFF.NameContainer)
+                        local origParent = rd(skinModel.Address + OFF.Parent)
+                        
+                        registerRestore(slotAddr, origSlot, skinModel.Address, origName, origParent)
+                        
+                        wr(skinModel.Address + OFF.NameContainer, rd(origSlot + OFF.NameContainer))
+                        wr(skinModel.Address + OFF.Parent, wf.Address)
+                        wr(slotAddr, skinModel.Address)
+                        swappedCount = swappedCount + 1
                     end
-                    
-                    -- Two-Way name swap (skinModel named as weapon, defModel named as skin)
-                    wr(skinModel.Address + OFF.NameContainer, origDefNC)
-                    if skinSlot then
-                        wr(defModel.Address + OFF.NameContainer, origSkinNC)
-                    end
-                    
-                    
-                    swappedCount = swappedCount + 1
                 end
             end
         end 
     end
 end
 
--- Run swapper and display notification
-applySkinSwapper()
-pcall(notify, "Rivals Skin Changer Active", "SC", 4)
+applyHybrid()
+pcall(notify, "Updated to v1.2", "SC", 4)
 
--- Unified cleanup: kill background threads, then restore all memory pointers
-local _cleaned = false
-local function fullCleanup()
-    if _cleaned then return end
-    _cleaned = true
-    _scriptAlive = false  -- stop FX culler and sound callback loops
-    task.wait()           -- yield one frame so loops exit
-    for _, r in ipairs(memoryRestores) do
-        pcall(function()
-            if r.defSlot and r.origDefInst then
-                wr(r.defSlot, r.origDefInst)
-                if r.origDefRef then wr(r.defSlot + 8, r.origDefRef) end
-            end
-            if r.skinSlot and r.origSkinInst then
-                wr(r.skinSlot, r.origSkinInst)
-                if r.origSkinRef then wr(r.skinSlot + 8, r.origSkinRef) end
-            end
-            if r.defAddr and r.origDefNC then wr(r.defAddr + OFF.NameContainer, r.origDefNC) end
-            if r.skinAddr and r.origSkinNC then wr(r.skinAddr + OFF.NameContainer, r.origSkinNC) end
+local TS = game:GetService("TeleportService")
+if TS then
+    pcall(function()
+        TS.TeleportInit:Connect(function()
+            restoreAllMemory()
         end)
-    end
-    memoryRestores = {}
+    end)
 end
 
 pcall(function()
-    LP.AncestryChanged:Connect(function() fullCleanup() end)
-end)
-pcall(function()
-    wf.AncestryChanged:Connect(function() fullCleanup() end)
-end)
-pcall(function()
-    local TS = game:GetService("TeleportService")
-    TS.TeleportInit:Connect(function() fullCleanup() end)
-end)
-pcall(function()
-    game:BindToClose(function() fullCleanup() end)
+    game:BindToClose(function()
+        restoreAllMemory()
+    end)
 end)
