@@ -455,13 +455,13 @@ local function fixCrossbowRig(skinModel)
     if arrow then
         local children = arrow:GetChildren()
         if #children >= 1 and children[1].Address then
-            local nc1 = rd(children[1].Address + OFF.NameContainer)
-            if nc1 then pcall(mwr, "string", nc1 + 8, "Primary\0") end
             pcall(function() arrow.PrimaryPart = children[1] end)
+            local nc1 = rd(children[1].Address + OFF.NameContainer)
+            if nc1 then pcall(mwr, "string", nc1 + 8, "Stick\0") end
         end
         if #children >= 2 and children[2].Address then
             local nc2 = rd(children[2].Address + OFF.NameContainer)
-            if nc2 then pcall(mwr, "string", nc2 + 8, "MeshPart\0") end
+            if nc2 then pcall(mwr, "string", nc2 + 8, "Tip\0") end
         end
     end
 end
