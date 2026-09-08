@@ -1663,6 +1663,7 @@ local renderSteppedConn = nil
 local pgDescConn = nil
 
 local function fastSyncGui()
+    pcall(alignWeaponWings)
     local pg = LP:FindFirstChild("PlayerGui")
     local mg = pg and pg:FindFirstChild("MainGui")
     local mf = mg and mg:FindFirstChild("MainFrame")
