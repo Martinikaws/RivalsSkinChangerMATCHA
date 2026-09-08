@@ -1,10 +1,9 @@
--- Rivals Master Skin Changer & Enhancement Engine (Zero-Latency Edition)
+-- Rivals Master Skin Changer & Enhancement Engine (Diagnostics Edition)
 -- Instant loading (<15ms): Direct memory slot resolution, zero synchronous GC stalls
 -- Complete weapon display fix: ViewModelRoot RightArm restoration & zero WaitForChild hangs
 -- Zero-Latency 2D Icon Engine: RenderStepped + DescendantAdded 0ms GUI icon synchronization
--- Native SoundCallbacks & Animation Engine: Reload, Inspect, Fire, and Custom Audio Sync
--- 3D Throwables & Projectiles: Real skin models for thrown molotovs, rockets, arrows & grenades
--- Particle & Ground Fire FX: Authentic Arch Molotov fire, Katana deflects, flames & scopes
+-- Ultra-Precise Wing Coordinate Alignment: Exact matrix matching for Uzi & Katana wings
+-- Robust Multi-Path Config Loader: Comprehensive error diagnostics & in-game user alerts
 local t_start = tick()
 
 if not pcall(memory_read, "int", game.Address) then 
@@ -1324,66 +1323,104 @@ task.spawn(function()
     end
 end)
 
--- Real-time Wing Retargeter (Katana Wings1/2 & Uzi Wing1/2)
+-- Ultra-Precise Wing Coordinate Matrices (extracted directly from official assets)
+local KATANA_WINGS1_CFS = {
+    CFrame.new(0.0002, 0.7842, 0.3093, -0.0000, 0.0000, -1.0000, 0.0000, 1.0000, 0.0000, 1.0000, 0.0000, -0.0000),
+    CFrame.new(0.0002, 0.7051, 0.5293, -0.0000, 0.0000, -1.0000, 0.0000, 1.0000, 0.0000, 1.0000, 0.0000, -0.0000),
+    CFrame.new(0.0002, 0.4365, 0.2489, -0.0000, 0.0000, -1.0000, 0.0000, 1.0000, 0.0000, 1.0000, 0.0000, -0.0000),
+    CFrame.new(0.0002, 0.5693, 0.4387, -0.0000, 0.0000, -1.0000, 0.0000, 1.0000, 0.0000, 1.0000, 0.0000, -0.0000),
+    CFrame.new(0.0002, 0.9033, 0.6045, -0.0000, 0.0000, -1.0000, 0.0000, 1.0000, 0.0000, 1.0000, 0.0000, -0.0000),
+    CFrame.new(0.0002, 1.1191, 0.5842, -0.0000, 0.0000, -1.0000, 0.0000, 1.0000, 0.0000, 1.0000, 0.0000, -0.0000),
+    CFrame.new(0.0002, 0.4941, 0.3402, -0.0000, 0.0000, -1.0000, 0.0000, 1.0000, 0.0000, 1.0000, 0.0000, -0.0000),
+    CFrame.new(0.0002, 0.8711, 0.4950, 1.0000, 0.0000, 0.0000, 0.0000, 1.0000, 0.0000, 0.0000, 0.0000, 1.0000)
+}
+
+local KATANA_WINGS2_CFS = {
+    CFrame.new(0.0002, 0.7842, -0.2913, 0.0000, 0.0000, 1.0000, 0.0000, 1.0000, 0.0000, -1.0000, 0.0000, 0.0000),
+    CFrame.new(0.0002, 0.7051, -0.5112, 0.0000, 0.0000, 1.0000, 0.0000, 1.0000, 0.0000, -1.0000, 0.0000, 0.0000),
+    CFrame.new(0.0002, 0.4365, -0.2307, 0.0000, 0.0000, 1.0000, 0.0000, 1.0000, 0.0000, -1.0000, 0.0000, 0.0000),
+    CFrame.new(0.0002, 0.5693, -0.4207, 0.0000, 0.0000, 1.0000, 0.0000, 1.0000, 0.0000, -1.0000, 0.0000, 0.0000),
+    CFrame.new(0.0002, 0.9033, -0.5864, 0.0000, 0.0000, 1.0000, 0.0000, 1.0000, 0.0000, -1.0000, 0.0000, 0.0000),
+    CFrame.new(0.0002, 1.1191, -0.5662, 0.0000, 0.0000, 1.0000, 0.0000, 1.0000, 0.0000, -1.0000, 0.0000, 0.0000),
+    CFrame.new(0.0002, 0.4941, -0.3221, 0.0000, 0.0000, 1.0000, 0.0000, 1.0000, 0.0000, -1.0000, 0.0000, 0.0000),
+    CFrame.new(0.0002, 0.8711, -0.4769, 1.0000, 0.0000, 0.0000, 0.0000, 1.0000, 0.0000, 0.0000, 0.0000, 1.0000)
+}
+
+local UZI_WING1_CFS = {
+    CFrame.new(0.2378, 0.3091, -0.5935, 0.4226, 0.5825, 0.6943, 0.0000, 0.7661, -0.6428, -0.9063, 0.2716, 0.3237),
+    CFrame.new(0.2371, 0.3089, -0.5945, 0.4226, 0.5825, 0.6943, 0.0000, 0.7661, -0.6428, -0.9063, 0.2716, 0.3237)
+}
+
+local UZI_WING2_CFS = {
+    CFrame.new(-0.2374, 0.3092, -0.5944, -0.4226, 0.5825, 0.6943, -0.0000, 0.7661, -0.6428, -0.9063, -0.2716, -0.3237),
+    CFrame.new(-0.2384, 0.3089, -0.5944, -0.4226, 0.5825, 0.6943, -0.0000, 0.7661, -0.6428, -0.9063, -0.2716, -0.3237)
+}
+
 local lastEquippedWeapon = nil
-task.spawn(function()
-    while _scriptAlive do
-        task.wait(0.04)
-        pcall(function()
-            local fp = workspace:FindFirstChild("ViewModels") and workspace.ViewModels:FindFirstChild("FirstPerson")
-            if fp then
-                for _, vmInst in ipairs(fp:GetChildren()) do
-                    local wName = vmInst.Name:match("%-%s*(.-)%s*%-") or vmInst.Name:match(LP.Name .. "%s*%-%s*(.-)%s*$")
-                    if wName and wName ~= lastEquippedWeapon then
-                        lastEquippedWeapon = wName
+local function alignWeaponWings()
+    local fp = workspace:FindFirstChild("ViewModels") and workspace.ViewModels:FindFirstChild("FirstPerson")
+    if not fp then return end
+    
+    for _, vmInst in ipairs(fp:GetChildren()) do
+        local wName = vmInst.Name:match("%-%s*(.-)%s*%-") or vmInst.Name:match(LP.Name .. "%s*%-%s*(.-)%s*$")
+        if wName and wName ~= lastEquippedWeapon then
+            lastEquippedWeapon = wName
+        end
+
+        local iv = vmInst:FindFirstChild("ItemVisual")
+        if iv then
+            local body = iv:FindFirstChild("Body") or iv:FindFirstChild("Model")
+            local bp = body and (body:FindFirstChild("Primary") or body:FindFirstChild("BodyPrimary"))
+            if bp then
+                local bcf = bp.CFrame
+                
+                -- Uzi Wings
+                local uw1 = iv:FindFirstChild("Wing1")
+                local uw2 = iv:FindFirstChild("Wing2")
+                if uw1 and uw2 then
+                    local idx1 = 1
+                    for _, c in ipairs(uw1:GetChildren()) do
+                        if c.ClassName == "MeshPart" or c.ClassName == "Part" then
+                            local cf = UZI_WING1_CFS[idx1] or UZI_WING1_CFS[2]
+                            if cf then c.CFrame = bcf * cf end
+                            idx1 = idx1 + 1
+                        end
                     end
-
-                    local hrp = vmInst:FindFirstChild("HumanoidRootPart")
-                    local itemVisual = vmInst:FindFirstChild("ItemVisual")
-                    local bodyModel = itemVisual and (itemVisual:FindFirstChild("Body") or itemVisual:FindFirstChild("Model"))
-                    local bodyPart = bodyModel and (bodyModel:FindFirstChild("Primary") or bodyModel:FindFirstChild("BodyPrimary"))
-                    local bodyJoint = hrp and (hrp:FindFirstChild('ItemVisual["Body"]') or hrp:FindFirstChild('ItemVisual[""]'))
-                    local targetPart = bodyPart or (bodyJoint and bodyJoint.Part1)
-                    
-                    if hrp and targetPart and targetPart.Address then
-                        local targetAddr = targetPart.Address
-
-                        -- Katana Wings
-                        local kw1 = hrp:FindFirstChild('ItemVisual["Wings1"]')
-                        if kw1 and kw1.Address and rd(kw1.Address + 280) ~= targetAddr then
-                            wr(kw1.Address + 280, targetAddr)
+                    local idx2 = 1
+                    for _, c in ipairs(uw2:GetChildren()) do
+                        if c.ClassName == "MeshPart" or c.ClassName == "Part" then
+                            local cf = UZI_WING2_CFS[idx2] or UZI_WING2_CFS[2]
+                            if cf then c.CFrame = bcf * cf end
+                            idx2 = idx2 + 1
                         end
-                        local kw2 = hrp:FindFirstChild('ItemVisual["Wings2"]')
-                        if kw2 and kw2.Address and rd(kw2.Address + 280) ~= targetAddr then
-                            wr(kw2.Address + 280, targetAddr)
-                        end
+                    end
+                end
 
-                        -- Uzi Wings
-                        local uw1 = hrp:FindFirstChild('ItemVisual["Wing1"]')
-                        if uw1 and uw1.Address and rd(uw1.Address + 280) ~= targetAddr then
-                            wr(uw1.Address + 280, targetAddr)
+                -- Katana Wings
+                local kw1 = iv:FindFirstChild("Wings1")
+                local kw2 = iv:FindFirstChild("Wings2")
+                if kw1 and kw2 then
+                    local idx1 = 1
+                    for _, c in ipairs(kw1:GetChildren()) do
+                        if c.ClassName == "MeshPart" or c.ClassName == "Part" then
+                            local cf = KATANA_WINGS1_CFS[idx1]
+                            if cf then c.CFrame = bcf * cf end
+                            idx1 = idx1 + 1
                         end
-                        local uw2 = hrp:FindFirstChild('ItemVisual["Wing2"]')
-                        if uw2 and uw2.Address and rd(uw2.Address + 280) ~= targetAddr then
-                            wr(uw2.Address + 280, targetAddr)
-                        end
-
-                        for _, joint in ipairs(hrp:GetChildren()) do
-                            if joint.ClassName == "Motor6D" and joint.Address then
-                                local jName = joint.Name
-                                if jName:find("Wing") or jName == 'ItemVisual[""]' then
-                                    if rd(joint.Address + 280) ~= targetAddr then
-                                        wr(joint.Address + 280, targetAddr)
-                                    end
-                                end
-                            end
+                    end
+                    local idx2 = 1
+                    for _, c in ipairs(kw2:GetChildren()) do
+                        if c.ClassName == "MeshPart" or c.ClassName == "Part" then
+                            local cf = KATANA_WINGS2_CFS[idx2]
+                            if cf then c.CFrame = bcf * cf end
+                            idx2 = idx2 + 1
                         end
                     end
                 end
             end
-        end)
+        end
     end
-end)
+end
 
 -- Robust Bullet, Reload, and Inspect Sound Replacement Table
 local SOUND_REPLACEMENTS = {
@@ -1535,93 +1572,207 @@ pcall(function()
     end)
 end)
 
--- Main ultra-fast skin swapper
-local function applySkinSwapper()
-    local configFileName = "rivals_config.lua"
-    if not isfile or not readfile or not isfile(configFileName) then return 0 end
+-- In-Game Alert / Notification System
+local function notifyUser(title, text, duration)
+    duration = duration or 8
+    if typeof(notify) == "function" then
+        pcall(notify, text, title, duration)
+    end
+    pcall(function()
+        game:GetService("StarterGui"):SetCore("SendNotification", {
+            Title = title,
+            Text = text,
+            Duration = duration
+        })
+    end)
+end
+
+-- Robust Config Line Parser
+local function parseConfigLine(rawLine)
+    local l = rawLine:gsub(string.char(13), ""):gsub(string.char(10), ""):match("^%s*(.-)%s*$")
+    if not l or #l == 0 or l:sub(1, 2) == "--" or l:sub(1, 1) == "#" or l == "return {" or l == "}" then
+        return nil, nil
+    end
     
-    local r2 = readfile(configFileName)
+    local sep = l:find("=") or l:find(":")
+    if not sep then return nil, nil end
+    
+    local w = l:sub(1, sep - 1):match("^%s*(.-)%s*$")
+    local s = l:sub(sep + 1):match("^%s*(.-)%s*$")
+    if not w or not s then return nil, nil end
+    
+    -- Strip trailing commas or semicolons
+    s = s:gsub("[,;]+$", ""):match("^%s*(.-)%s*$")
+    
+    -- Strip brackets
+    w = w:gsub('^%["', ''):gsub('"%]$', ''):gsub("^%['", ''):gsub("'%]$", ''):gsub('^%[', ''):gsub('%]$', '')
+    
+    -- Strip outer quotes
+    w = w:gsub('^"', ''):gsub('"$', ''):gsub("^'", ''):gsub("'$", ''):match("^%s*(.-)%s*$")
+    s = s:gsub('^"', ''):gsub('"$', ''):gsub("^'", ''):gsub("'$", ''):match("^%s*(.-)%s*$")
+    
+    if w and s and #w > 0 and #s > 0 then
+        return w, s
+    end
+    return nil, nil
+end
+
+-- Main ultra-fast skin swapper with comprehensive error diagnostics
+local function applySkinSwapper()
+    if not isfile or not readfile then
+        return 0, "Executor does not support isfile/readfile functions."
+    end
+    
+    -- Search all possible candidate paths in workspace
+    local candidatePaths = {
+        "rivals_config.lua",
+        "workspace/rivals_config.lua",
+        "rivals_config.lua.txt",
+        "rivals_config.txt",
+        "workspace/rivals_config.txt",
+        "rivals_config (1).lua",
+        "rivals_config(1).lua",
+        "Rivals_Config.lua",
+        "rivals_config"
+    }
+
+    if typeof(listfiles) == "function" then
+        pcall(function()
+            for _, folder in ipairs({"", "workspace"}) do
+                local files = listfiles(folder) or {}
+                for _, f in ipairs(files) do
+                    local clean = f:lower():gsub(string.char(92), "/")
+                    if clean:find("rivals_config") then
+                        table.insert(candidatePaths, 1, f)
+                    end
+                end
+            end
+        end)
+    end
+    
+    local targetFile = nil
+    for _, path in ipairs(candidatePaths) do
+        local ok, exists = pcall(isfile, path)
+        if ok and exists then
+            targetFile = path
+            break
+        end
+    end
+    
+    if not targetFile then
+        return 0, "rivals_config.lua was not found in your executor's workspace folder! Make sure rivals_config.lua is placed in your workspace directory."
+    end
+    
+    local okRead, r2 = pcall(readfile, targetFile)
+    if not okRead or not r2 then
+        return 0, "Failed to read file '" .. tostring(targetFile) .. "'. File may be locked by another application."
+    end
+    
+    -- Strip UTF-8 BOM if present
+    if r2:sub(1, 3) == string.char(239, 187, 191) then
+        r2 = r2:sub(4)
+    end
+    
+    if #r2:gsub("%s+", "") == 0 then
+        return 0, "Config file '" .. tostring(targetFile) .. "' is completely empty (0 bytes). Please generate your config on the website."
+    end
+
+    if not wf then
+        return 0, "Game assets folder (ViewModels.Weapons) is not loaded yet. Are you in a match or shooting range?"
+    end
+
+    local parsedPairs = 0
+    local nonDefaultPairs = 0
+    local missingBaseWeapons = {}
+    local missingSkinModels = {}
     local swappedCount = 0
 
     for _, rawLine in ipairs(r2:split(string.char(10))) do 
-        local l = rawLine:gsub(string.char(13), "")
-        local q = l:find("=")
-        if q then 
-            local weaponName = l:sub(1, q - 1):match("^%s*(.-)%s*$")
-            local skinTarget = l:sub(q + 1):match("^%s*(.-)%s*$")
-            
-            ACTIVE_CONFIG_SKINS[weaponName] = skinTarget
-            
-            -- 1. Viewmodel 3D Model Memory Swapping
-            local defModel = wf:FindFirstChild(weaponName)
-            local skinModel = findSkinModel(skinTarget)
-            
-            if defModel and skinModel and defModel.Address and skinModel.Address and defModel.Address ~= skinModel.Address then
-                rigSkinModel(skinModel)
+        local weaponName, skinTarget = parseConfigLine(rawLine)
+        if weaponName and skinTarget then
+            parsedPairs = parsedPairs + 1
+            local skinLower = skinTarget:lower()
+            if skinLower ~= "default" and skinLower ~= "standard" then
+                nonDefaultPairs = nonDefaultPairs + 1
+                ACTIVE_CONFIG_SKINS[weaponName] = skinTarget
                 
-                local weaponLower = weaponName:lower()
-                local skinLower = skinTarget:lower()
-                if weaponLower:find("crossbow") or skinLower:find("crossbow") then
-                    pcall(fixCrossbowRig, skinModel)
-                elseif weaponLower:find("bow") or skinLower:find("bow") then
-                    pcall(fixBowRig, skinModel)
-                elseif weaponLower:find("rpg") or skinLower:find("rpkey") or skinLower:find("rocket") then
-                    pcall(fixRPGRig, skinModel)
-                elseif weaponLower == "grenade" or skinLower:find("nade") or skinLower:find("bomb") then
-                    pcall(fixGrenadeRig, skinModel)
-                elseif weaponLower == "gunblade" or skinLower:find("gunblade") or skinLower:find("blade") then
-                    pcall(fixGunbladeRig, skinModel)
-                elseif weaponLower == "katana" or skinLower:find("katana") then
-                    pcall(fixKatanaRig, skinModel)
-                end
-                
-                if swapTwoWay(defModel, skinModel, wf) then
-                    swappedCount = swappedCount + 1
-                end
-            end
-            
-            -- 2. Throwables 3D Model Swapping (Molotov, Grenade, Flashbang, Satchel, Warpstone)
-            if tf and THROWABLES_NAMES[weaponName] then
-                local tb = tf:FindFirstChild(weaponName)
-                local ts = tf:FindFirstChild(skinTarget)
-                if tb and ts then
-                    swapTwoWay(tb, ts, tf)
-                end
-            end
-            
-            -- 3. Projectiles 3D Model Swapping (RPG, Bow, Crossbow, Slingshot, Freeze Ray, Distortion, Permafrost)
-            if pf and PROJECTILES_NAMES[weaponName] then
-                local pb = pf:FindFirstChild(weaponName)
-                local ps = pf:FindFirstChild(skinTarget)
-                if pb and ps then
-                    swapTwoWay(pb, ps, pf)
-                end
-            end
-            
-            -- 4. Misc Effects (Ground Fire, Explosions, Deflect FX, Flames, Portals)
-            if mi then
-                local spec = MISC_SPECIAL_MAP[skinTarget]
-                if spec then
-                    for folderName, itemName in pairs(spec) do
-                        local folder = mi:FindFirstChild(folderName)
-                        if folder then
-                            local defItem = folder:FindFirstChild("Default") or folder:FindFirstChild(weaponName)
-                            local skinItem = folder:FindFirstChild(itemName)
-                            if defItem and skinItem then
-                                swapTwoWay(defItem, skinItem, folder)
+                -- 1. Viewmodel 3D Model Memory Swapping
+                local defModel = wf:FindFirstChild(weaponName)
+                if not defModel then
+                    table.insert(missingBaseWeapons, weaponName)
+                else
+                    local skinModel = findSkinModel(skinTarget)
+                    if not skinModel then
+                        table.insert(missingSkinModels, skinTarget)
+                    else
+                        if defModel.Address and skinModel.Address and defModel.Address ~= skinModel.Address then
+                            rigSkinModel(skinModel)
+                            
+                            local weaponLower = weaponName:lower()
+                            if weaponLower:find("crossbow") or skinLower:find("crossbow") then
+                                pcall(fixCrossbowRig, skinModel)
+                            elseif weaponLower:find("bow") or skinLower:find("bow") then
+                                pcall(fixBowRig, skinModel)
+                            elseif weaponLower:find("rpg") or skinLower:find("rpkey") or skinLower:find("rocket") then
+                                pcall(fixRPGRig, skinModel)
+                            elseif weaponLower == "grenade" or skinLower:find("nade") or skinLower:find("bomb") then
+                                pcall(fixGrenadeRig, skinModel)
+                            elseif weaponLower == "gunblade" or skinLower:find("gunblade") or skinLower:find("blade") then
+                                pcall(fixGunbladeRig, skinModel)
+                            elseif weaponLower == "katana" or skinLower:find("katana") then
+                                pcall(fixKatanaRig, skinModel)
+                            end
+                            
+                            if swapTwoWay(defModel, skinModel, wf) then
+                                swappedCount = swappedCount + 1
                             end
                         end
                     end
                 end
                 
-                -- Explosion particles in Misc
-                local expSkin = MISC_EXPLOSIONS_MAP[skinTarget]
-                local expBase = MISC_EXPLOSIONS_BASE[weaponName]
-                if expSkin and expBase then
-                    local sx = mi:FindFirstChild(expSkin)
-                    local dx = mi:FindFirstChild(expBase)
-                    if sx and dx then
-                        swapTwoWay(dx, sx, mi)
+                -- 2. Throwables 3D Model Swapping (Molotov, Grenade, Flashbang, Satchel, Warpstone)
+                if tf and THROWABLES_NAMES[weaponName] then
+                    local tb = tf:FindFirstChild(weaponName)
+                    local ts = tf:FindFirstChild(skinTarget)
+                    if tb and ts then
+                        swapTwoWay(tb, ts, tf)
+                    end
+                end
+                
+                -- 3. Projectiles 3D Model Swapping (RPG, Bow, Crossbow, Slingshot, Freeze Ray, Distortion, Permafrost)
+                if pf and PROJECTILES_NAMES[weaponName] then
+                    local pb = pf:FindFirstChild(weaponName)
+                    local ps = pf:FindFirstChild(skinTarget)
+                    if pb and ps then
+                        swapTwoWay(pb, ps, pf)
+                    end
+                end
+                
+                -- 4. Misc Effects (Ground Fire, Explosions, Deflect FX, Flames, Portals)
+                if mi then
+                    local spec = MISC_SPECIAL_MAP[skinTarget]
+                    if spec then
+                        for folderName, itemName in pairs(spec) do
+                            local folder = mi:FindFirstChild(folderName)
+                            if folder then
+                                local defItem = folder:FindFirstChild("Default") or folder:FindFirstChild(weaponName)
+                                local skinItem = folder:FindFirstChild(itemName)
+                                if defItem and skinItem then
+                                    swapTwoWay(defItem, skinItem, folder)
+                                end
+                            end
+                        end
+                    end
+                    
+                    -- Explosion particles in Misc
+                    local expSkin = MISC_EXPLOSIONS_MAP[skinTarget]
+                    local expBase = MISC_EXPLOSIONS_BASE[weaponName]
+                    if expSkin and expBase then
+                        local sx = mi:FindFirstChild(expSkin)
+                        local dx = mi:FindFirstChild(expBase)
+                        if sx and dx then
+                            swapTwoWay(dx, sx, mi)
+                        end
                     end
                 end
             end
@@ -1631,14 +1782,38 @@ local function applySkinSwapper()
     -- 5. Native SoundCallbacks Redirection
     pcall(applySoundCallbacks)
     
-    return swappedCount
+    if swappedCount == 0 then
+        if parsedPairs == 0 then
+            return 0, "Found '" .. tostring(targetFile) .. "', but no valid Weapon=Skin lines were detected! Check file format."
+        elseif nonDefaultPairs == 0 then
+            return 0, "All " .. parsedPairs .. " weapons in '" .. tostring(targetFile) .. "' are set to Default. Please select at least one custom skin on the site."
+        elseif #missingBaseWeapons > 0 and #missingSkinModels == 0 then
+            return 0, "Base weapons (" .. table.concat(missingBaseWeapons, ", ") .. ") not found in game folder."
+        elseif #missingSkinModels > 0 then
+            return 0, "Skin models not found in game assets: " .. table.concat(missingSkinModels, ", ")
+        else
+            return 0, "Memory swap failed. Ensure memory read/write permissions are allowed in executor."
+        end
+    end
+
+    return swappedCount, nil
 end
 
--- Run swapper
-local count = applySkinSwapper()
+-- Run swapper with error detection and reporting
+local count, errorReason = applySkinSwapper()
 local elapsed = math.floor((tick() - t_start) * 1000)
-local msg = "Swapped " .. tostring(count) .. " skins in " .. tostring(elapsed) .. "ms!"
-print("[RivalsSkinChanger] " .. msg)
+
+if count == 0 then
+    local errText = errorReason or "Unknown error while loading skins."
+    warn("[RivalsSkinChanger] ==================================================")
+    warn("[RivalsSkinChanger] ERROR: 0 SKINS LOADED!")
+    warn("[RivalsSkinChanger] Details: " .. errText)
+    warn("[RivalsSkinChanger] ==================================================")
+    notifyUser("Rivals Skin Changer Error", "0 Skins Loaded: " .. errText, 10)
+else
+    local msg = "Swapped " .. tostring(count) .. " skins in " .. tostring(elapsed) .. "ms!"
+    print("[RivalsSkinChanger] " .. msg)
+end
 
 -- Real-time 2D Icon Engine
 local function replaceStandardIcon(label)
