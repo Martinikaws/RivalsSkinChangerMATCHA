@@ -1,42 +1,15 @@
--- Rivals Master Skin Changer & Enhancement Engine (Diagnostics Edition)
--- Instant loading (<15ms): Direct memory slot resolution, zero synchronous GC stalls
--- Complete weapon display fix: ViewModelRoot RightArm restoration & zero WaitForChild hangs
--- Zero-Latency 2D Icon Engine: RenderStepped + DescendantAdded 0ms GUI icon synchronization
--- Ultra-Precise Wing Coordinate Alignment: Exact matrix matching for Uzi & Katana wings
--- Robust Multi-Path Config Loader: Comprehensive error diagnostics & in-game user alerts
-local t_start = tick()
+-- =========================================================================
+--  RIVALS SKIN CHANGER (Updated & Enhanced Icons.lua Edition)
+--  Zero-Crash Architecture: Pure One-Way Viewmodel Swapping & Threaded 2D GUI Icons
+-- =========================================================================
 
 if not pcall(memory_read, "int", game.Address) then 
+    pcall(notify, "UnsafeLua is disabled in executor.", "SC", 5) 
     return 
 end
 
-if not game:IsLoaded() then game.Loaded:Wait() end
-
-local LP = game:GetService("Players").LocalPlayer
-while not LP do
-    task.wait(0.05)
-    LP = game:GetService("Players").LocalPlayer
-end
-
-if game.GameId ~= 6035872082 then return end
-
--- Idempotency: restore memory pointers if previously active
-if _G.__RIVALS_SKIN_CHANGER_ACTIVE and type(_G.__RIVALS_SKIN_CHANGER_RESTORE) == "function" then
-    pcall(_G.__RIVALS_SKIN_CHANGER_RESTORE)
-end
-
-local A = LP:WaitForChild("PlayerScripts", 5):WaitForChild("Assets", 5)
-local vm = A and A:WaitForChild("ViewModels", 5)
-local wf = vm and vm:WaitForChild("Weapons", 5)
-local mi = A and A:WaitForChild("Misc", 5)
-local tf = A and A:FindFirstChild("Throwables")
-local pf = A and A:FindFirstChild("Projectiles")
-
-if not wf then
-    return
-end
-
 local mrd, mwr, pcall, ipairs, pairs = memory_read, memory_write, pcall, ipairs, pairs
+local floor, byte, rnd = math.floor, string.byte, math.random
 
 local rd = function(a) 
     local o, v = pcall(mrd, "uintptr_t", a)
@@ -47,109 +20,197 @@ local wr = function(a, v)
     pcall(mwr, "uintptr_t", a, v) 
 end
 
-local OFF = {
-    Parent = 104,
-    NameContainer = 112,
-    Children = 120,
-    Transparency = 304
+-- Dual notification engine
+local function notifyUser(title, text, duration)
+    duration = duration or 6
+    if typeof(notify) == "function" then pcall(notify, text, title, duration) end
+    pcall(function()
+        game:GetService("StarterGui"):SetCore("SendNotification", {
+            Title = title,
+            Text = text,
+            Duration = duration
+        })
+    end)
+end
+
+-- Robust Multi-Format Config Parser
+local function parseConfigLine(rawLine)
+    local l = rawLine:gsub(string.char(13), ""):gsub(string.char(10), ""):match("^%s*(.-)%s*$")
+    if not l or #l == 0 or l:sub(1, 2) == "--" or l:sub(1, 1) == "#" or l == "return {" or l == "}" then
+        return nil, nil
+    end
+    local sep = l:find("=") or l:find(":")
+    if not sep then return nil, nil end
+    local w = l:sub(1, sep - 1):match("^%s*(.-)%s*$")
+    local s = l:sub(sep + 1):match("^%s*(.-)%s*$")
+    if not w or not s then return nil, nil end
+    s = s:gsub("[,;]+$", ""):match("^%s*(.-)%s*$")
+    w = w:gsub('^%["', ''):gsub('"%]$', ''):gsub("^%['", ''):gsub("'%]$", ''):gsub('^%[', ''):gsub('%]$', '')
+    w = w:gsub('^"', ''):gsub('"$', ''):gsub("^'", ''):gsub("'$", ''):match("^%s*(.-)%s*$")
+    s = s:gsub('^"', ''):gsub('"$', ''):gsub("^'", ''):gsub("'$", ''):match("^%s*(.-)%s*$")
+    if w and s and #w > 0 and #s > 0 then return w, s end
+    return nil, nil
+end
+
+-- Multi-path config discovery
+local candidatePaths = {
+    "rivals_config.lua",
+    "workspace/rivals_config.lua",
+    "rivals_config.lua.txt",
+    "rivals_config.txt",
+    "workspace/rivals_config.txt",
+    "rivals_config (1).lua",
+    "rivals_config(1).lua",
+    "Rivals_Config.lua",
+    "rivals_config"
 }
 
-local IMG_OFF = 0xA10 -- Verified default for modern 64-bit engine build
-
-local ga = function(f) 
-    if not f or not f.Address then return end
-    local n = rd(f.Address + OFF.Children)
-    if not n or n == 0 then return end
-    local b, e = rd(n), rd(n + 8)
-    if b and e then return b, e end 
-end
-
--- Find instance slot in a folder's memory vector
-local function findSlotAddress(inst, targetFolder)
-    if not inst or not inst.Address or not targetFolder or not targetFolder.Address then return nil end
-    local b, e = ga(targetFolder)
-    if not b or not e then return nil end
-    for slotAddr = b, e - 16, 16 do
-        if rd(slotAddr) == inst.Address then
-            return slotAddr
-        end
-    end
-    return nil
-end
-
--- In-place ImageLabel Image string writer (safe, zero reallocations, buffer cap <= 31)
-local function writeImage(label, newAssetId)
-    if not _scriptAlive or not label or not label.Address or not newAssetId then return false end
-    if not label:IsDescendantOf(game) then return false end
-    local a = label.Address
-    local ptr = mrd("uintptr_t", a + IMG_OFF)
-    if not ptr or ptr < 0x10000000000 or ptr > 0x7FFFFFFFFFFF then return false end
-    local cur = mrd("string", ptr)
-    if not cur or cur == newAssetId then return true end
-    local cap = mrd("uint64_t", a + IMG_OFF + 24) or 31
-    local len = #newAssetId
-    if len > cap then return false end
-    for i = 1, len do
-        mwr("uint8_t", ptr + i - 1, string.byte(newAssetId, i))
-    end
-    mwr("uint8_t", ptr + len, 0)
-    mwr("uint64_t", a + IMG_OFF + 16, len)
-    return true
-end
-
--- Dynamic offset validator for IMG_OFF
-local function checkImgOffset()
-    local pg = LP:FindFirstChild("PlayerGui")
-    if not pg then return end
-    for _, d in ipairs(pg:GetDescendants()) do
-        if d.ClassName == "ImageLabel" and d.Address then
-            local p = mrd("uintptr_t", d.Address + IMG_OFF)
-            if p and p > 0x10000000000 and p < 0x7FFFFFFFFFFF then
-                local s = mrd("string", p)
-                if s and s:find("rbxassetid://") then return end
-            end
-            for off = 0x980, 0xB00, 8 do
-                local ptr = mrd("uintptr_t", d.Address + off)
-                if ptr and ptr > 0x10000000000 and ptr < 0x7FFFFFFFFFFF then
-                    local s = mrd("string", ptr)
-                    if s and s:find("rbxassetid://") then
-                        IMG_OFF = off
-                        return
-                    end
+if typeof(listfiles) == "function" then
+    pcall(function()
+        for _, folder in ipairs({"", "workspace"}) do
+            local files = listfiles(folder) or {}
+            for _, f in ipairs(files) do
+                local clean = f:lower():gsub(string.char(92), "/")
+                if clean:find("rivals_config") then
+                    table.insert(candidatePaths, 1, f)
                 end
             end
+        end
+    end)
+end
+
+local targetFile, r2 = nil, nil
+for _, path in ipairs(candidatePaths) do
+    local ok, exists = pcall(isfile, path)
+    if ok and exists then
+        local okR, content = pcall(readfile, path)
+        if okR and content and #content > 0 then
+            targetFile = path
+            r2 = content
             break
         end
     end
 end
-pcall(checkImgOffset)
 
--- Fix ViewModelRoot RightArm if its NameContainer was corrupted/cleared
-local function fixViewModelRoots()
-    local containers = {}
-    if LP:FindFirstChild("PlayerScripts") and LP.PlayerScripts:FindFirstChild("Assets") and LP.PlayerScripts.Assets:FindFirstChild("Misc") then
-        table.insert(containers, LP.PlayerScripts.Assets.Misc)
+if not r2 then
+    warn("[RivalsSkinChanger] ERROR: rivals_config.lua was not found in your executor's workspace folder!")
+    notifyUser("Rivals Skin Changer Error", "rivals_config.lua not found in workspace folder!", 8)
+    return
+end
+
+-- Strip UTF-8 BOM
+if r2:sub(1, 3) == string.char(239, 187, 191) then
+    r2 = r2:sub(4)
+end
+
+local en = {}
+for _, rawLine in ipairs(r2:split(string.char(10))) do
+    local w, s = parseConfigLine(rawLine)
+    if w and s then
+        en[#en + 1] = {w, s}
     end
-    local sp = game:GetService("StarterPlayer")
-    if sp:FindFirstChild("StarterPlayerScripts") and sp.StarterPlayerScripts:FindFirstChild("Assets") and sp.StarterPlayerScripts.Assets:FindFirstChild("Misc") then
-        table.insert(containers, sp.StarterPlayerScripts.Assets.Misc)
+end
+
+if #en == 0 then
+    warn("[RivalsSkinChanger] ERROR: Config file is empty or contains no valid Weapon=Skin lines!")
+    notifyUser("Rivals Skin Changer Error", "Config file has 0 valid Weapon=Skin entries!", 8)
+    return
+end
+
+-- Native SoundCallbacks Redirection
+task.spawn(function()
+    local pfx = function(n) return n:lower():gsub("[%s%-'%.]+", "") end
+    local AL
+    for i = 1, 30 do
+        pcall(function()
+            local rs = game:GetService("ReplicatedStorage")
+            AL = rs:FindFirstChild("Modules") and rs.Modules:FindFirstChild("AnimationLibrary")
+        end)
+        if AL then break end
+        task.wait(1)
     end
-    
-    for _, misc in ipairs(containers) do
-        local vmr = misc:FindFirstChild("ViewModelRoot")
-        if vmr and not vmr:FindFirstChild("RightArm") then
-            for _, c in ipairs(vmr:GetChildren()) do
-                if c.ClassName == "Part" and (c.Name == "" or c.Name == "_fake") then
-                    pcall(function() c.Name = "RightArm" end)
-                    break
+    if not AL then return end
+    local SC = AL:FindFirstChild("SoundCallbacks")
+    if not SC then return end
+    local abn = {}
+    for _, c in ipairs(SC:GetChildren()) do abn[c.Name] = c end
+    for _, e in ipairs(en) do
+        local wp, sp = pfx(e[1]), pfx(e[2])
+        local spfx = wp .. "_" .. sp .. "_"
+        for name, inst in pairs(abn) do
+            if name:sub(1, #spfx) == spfx then
+                local di = abn[wp .. "_" .. name:sub(#spfx + 1)]
+                if di and inst and di.Address and inst.Address then
+                    local a, b = mrd("uintptr_t", di.Address + 0x8), mrd("uintptr_t", inst.Address + 0x8)
+                    if a and b and a ~= b then
+                        mwr("uintptr_t", di.Address + 0x8, b)
+                        mwr("uintptr_t", inst.Address + 0x8, a)
+                    end
                 end
             end
         end
     end
-end
-pcall(fixViewModelRoots)
+end)
 
-local ITEM_ICONS = {
+local LP = game:GetService("Players").LocalPlayer
+while not LP do
+    task.wait(0.5)
+    LP = game:GetService("Players").LocalPlayer
+end
+
+if game.GameId ~= 6035872082 then return end
+
+-- Confirmed 64-bit offsets with dynamic fallback
+local OFF = {
+    Parent = 104,
+    Children = 120,
+    Name = 112
+}
+
+pcall(function()
+    local hs = game:GetService("HttpService")
+    local raw = game:HttpGet("https://offsets.imtheo.lol/Offsets.json")
+    if raw and #raw > 100 then
+        local o2 = hs:JSONDecode(raw).Offsets
+        if o2 and o2.Instance then
+            if o2.Instance.Parent then OFF.Parent = o2.Instance.Parent OFF.Children = o2.Instance.Parent + 8 end
+            if o2.Instance.NameContainer then OFF.Name = o2.Instance.NameContainer
+            elseif o2.Instance.Name then OFF.Name = o2.Instance.Name end
+        end
+    end
+end)
+
+local A, vm, wf, mi
+repeat
+    task.wait(0.5)
+    pcall(function()
+        A = LP.PlayerScripts:FindFirstChild("Assets")
+        vm = A and A:FindFirstChild("ViewModels")
+        wf = vm and vm:FindFirstChild("Weapons")
+        mi = A and A:FindFirstChild("Misc")
+    end)
+until wf
+
+local tf = A:FindFirstChild("Throwables")
+local pf = A:FindFirstChild("Projectiles")
+local PG = LP:FindFirstChild("PlayerGui")
+
+local sc, aW = {}, {}
+local ff = function(p, n) return p and p:FindFirstChild(n) end
+
+for _, f in ipairs(vm:GetChildren()) do
+    if f.ClassName == "Folder" and f.Name ~= "Weapons" then
+        for _, x in ipairs(f:GetChildren()) do
+            sc[x.Name] = x
+        end
+    end
+end
+for _, w in ipairs(wf:GetChildren()) do
+    aW[w.Name] = w
+end
+
+-- Embedded official icons database (49 Weapons & 470 Skins)
+local IL = {
     ["Assault Rifle"] = {
         ["Standard"] = "rbxassetid://17160682738",
         ["10B Visits"] = "rbxassetid://122165086598560",
@@ -721,7 +782,7 @@ local ITEM_ICONS = {
 }
 
 
-local STANDARD_ICON_MAP = {
+local IS = {
     ["rbxassetid://17160682738"] = "Assault Rifle",
     ["rbxassetid://93390542043222"] = "Battle Axe",
     ["rbxassetid://17160802080"] = "Bow",
@@ -775,415 +836,62 @@ local STANDARD_ICON_MAP = {
 
 
 
--- Explicit skin mappings for special names / case folders
-local EXACT_SKIN_MAP = {
-    ["AKEY-47"] = {folder = "Bundles", name = "AKEY-47"},
-    ["Key Bow"] = {folder = "Bundles", name = "Key Bow"},
-    ["Key Spray"] = {folder = "Bundles", name = "Key Spray"},
-    ["Keylisong"] = {folder = "Bundles", name = "Keylisong"},
-    ["Keynade"] = {folder = "Bundles", name = "Keynade"},
-    ["Keynais"] = {folder = "Bundles", name = "Keynais"},
-    ["Keyper"] = {folder = "Bundles", name = "Keyper"},
-    ["Keyst Rifle"] = {folder = "Bundles", name = "Keyst Rifle"},
-    ["Keythe"] = {folder = "Bundles", name = "Keythe"},
-    ["Keythrower"] = {folder = "Bundles", name = "Keythrower"},
-    ["Keyttle Axe"] = {folder = "Bundles", name = "Keyttle Axe"},
-    ["RPKEY"] = {folder = "Bundles", name = "RPKEY"},
-    ["Keyshot"] = {folder = "Bundles", name = "Keyshot"},
-    ["Keyblade"] = {folder = "Bundles", name = "Keyblade"},
-    ["Keyvolver"] = {folder = "Bundles", name = "Keyvolver"},
-    ["Shotkey"] = {folder = "Bundles", name = "Shotkey"},
-    ["Keyzi"] = {folder = "Bundles", name = "Keyzi"},
-    ["Keytana"] = {folder = "Bundles", name = "Keytana"},
-    ["Pot o' Keys"] = {folder = "Bundles", name = "Pot o' Keys"},
-    ["Cuddle Bomb"] = {folder = "Bundles", name = "Cuddle Bomb"},
-    ["Ban Hammer"] = {folder = "Bundles", name = "Ban Hammer"},
-    ["10B Visits"] = {folder = "Bundles", name = "10B Visits"},
-    ["Arch Crossbow"] = {folder = "Seasons", name = "Arch Crossbow"},
-    ["Arch Katana"] = {folder = "Seasons", name = "Arch Katana"},
-    ["Arch Uzi"] = {folder = "Seasons", name = "Arch Uzi"},
-    ["Arch Molotov"] = {folder = "Seasons", name = "Arch Molotov"},
-    ["Handsaws"] = {folder = "Skin Case 2", name = "Handsaws"},
-    ["Void Pistols"] = {folder = "Skin Case 2", name = "Void Pistols"},
-    ["Laptop"] = {folder = "Skin Case 2", name = "Laptop"},
-    ["Camera"] = {folder = "Skin Case 2", name = "Camera"},
-    ["Uranium Launcher"] = {folder = "Skin Case 2", name = "Uranium Launcher"},
-    ["AUG"] = {folder = "Skin Case 2", name = "AUG"},
-    ["Void Rifle"] = {folder = "Skin Case 3", name = "Void Rifle"},
-    ["Event Horizon"] = {folder = "Skin Case 3", name = "Event Horizon"},
-    ["Fighter Jet"] = {folder = "Skin Case 3", name = "Fighter Jet"},
-    ["Balloon Shorty"] = {folder = "Skin Case 3", name = "Balloon Shorty"},
-    ["Masterpiece"] = {folder = "Skin Case 3", name = "Masterpiece"},
-    ["Paintbrush"] = {folder = "Skin Case 3", name = "Paintbrush"},
-    ["Shady Chicken Sandwich"] = {folder = "Skin Case 3", name = "Shady Chicken Sandwich"},
-    ["Banana Flare"] = {folder = "Skin Case 3", name = "Banana Flare"},
-    ["Squid Flare"] = {folder = "Skin Case 3", name = "Banana Flare"},
-    ["Boneclaw Revolver"] = {folder = "Spooky Skin Case", name = "Boneclaw Revolver"},
-    ["Boneclaw Horn"] = {folder = "Spooky Skin Case", name = "Boneclaw Horn"},
-    ["Brain Gun"] = {folder = "Spooky Skin Case", name = "Brain Gun"},
-    ["Warpeye"] = {folder = "Spooky Skin Case", name = "Warpeye"},
-    ["Warpbone"] = {folder = "Spooky Skin Case", name = "Warpbone"},
-    ["Warpstar"] = {folder = "Spooky Skin Case", name = "Warpstar"},
-    ["Bat Bow"] = {folder = "Spooky Skin Case", name = "Bat Bow"},
-    ["Bat Daggers"] = {folder = "Spooky Skin Case", name = "Bat Daggers"},
-    ["Bat Scythe"] = {folder = "Spooky Skin Case", name = "Bat Scythe"},
-    ["Blobsaw"] = {folder = "Spooky Skin Case", name = "Blobsaw"},
-    ["Candy Bag"] = {folder = "Spooky Skin Case", name = "Candy Bag"},
-    ["Candy Bucket"] = {folder = "Spooky Skin Case", name = "Bucket Of Candy"},
-    ["Bucket Of Candy"] = {folder = "Spooky Skin Case", name = "Bucket Of Candy"},
-    ["Jack O'Launcher"] = {folder = "Spooky Skin Case", name = "Jack O'Launcher"},
-    ["Jack O'Thrower"] = {folder = "Spooky Skin Case", name = "Jack O'Thrower"},
-    ["Pumpkin Carver"] = {folder = "Spooky Skin Case", name = "Pumpkin Carver"},
-    ["Pumpkin Claws"] = {folder = "Spooky Skin Case", name = "Pumpkin Claws"},
-    ["Pumpkin Handgun"] = {folder = "Spooky Skin Case", name = "Pumpkin Handgun"},
-    ["Pumpkin Minigun"] = {folder = "Spooky Skin Case", name = "Pumpkin Minigun"},
-    ["Scythe of Death"] = {folder = "Spooky Skin Case", name = "Scythe of Death"},
-    ["Soul Grenade"] = {folder = "Spooky Skin Case", name = "Soul Grenade"},
-    ["Soul Pistols"] = {folder = "Spooky Skin Case", name = "Soul Pistols"},
-    ["Soul Rifle"] = {folder = "Spooky Skin Case", name = "Soul Rifle"},
-    ["Spider Ray"] = {folder = "Spooky Skin Case", name = "Spider Ray"},
-    ["Spider Web"] = {folder = "Spooky Skin Case", name = "Spider Web"},
-    ["Tombstone Shield"] = {folder = "Spooky Skin Case", name = "Tombstone Shield"},
-    ["Vexed Candle"] = {folder = "Spooky Skin Case", name = "Vexed Candle"},
-    ["Vexed Flare Gun"] = {folder = "Spooky Skin Case", name = "Vexed Flare Gun"},
-    ["Air Horn"] = {folder = "Community Skin Case", name = "Air Horn"},
-    ["Anchor"] = {folder = "Community Skin Case", name = "Anchor"},
-    ["Balance"] = {folder = "Community Skin Case", name = "Balance"},
-    ["Banana"] = {folder = "Community Skin Case", name = "Banana"},
-    ["Bongos"] = {folder = "Community Skin Case", name = "Bongos"},
-    ["Boombox"] = {folder = "Community Skin Case", name = "Boombox"},
-    ["Broken Hearts"] = {folder = "Community Skin Case", name = "Broken Hearts"},
-    ["Bubbler"] = {folder = "Community Skin Case", name = "Bubbler"},
-    ["Cardboard Gun"] = {folder = "Community Skin Case", name = "Cardboard Gun"},
-    ["Cupcake Launcher"] = {folder = "Community Skin Case", name = "Cupcake Launcher"},
-    ["Donut Gun"] = {folder = "Community Skin Case", name = "Donut Gun"},
-    ["Double Bass"] = {folder = "Community Skin Case", name = "Double Bass"},
-    ["Dragon Hammer"] = {folder = "Community Skin Case", name = "Dragon Hammer"},
-    ["Eyeball"] = {folder = "Community Skin Case", name = "Eyeball"},
-    ["Frying Pan"] = {folder = "Community Skin Case", name = "Frying Pan"},
-    ["Genie Lamp"] = {folder = "Community Skin Case", name = "Genie Lamp"},
-    ["Giggle Grenade"] = {folder = "Community Skin Case", name = "Giggle Grenade"},
-    ["Giggle Gun"] = {folder = "Community Skin Case", name = "Giggle Gun"},
-    ["Glove Knife"] = {folder = "Community Skin Case", name = "Glove Knife"},
-    ["Guitar"] = {folder = "Community Skin Case", name = "Guitar"},
-    ["Hotel Bell"] = {folder = "Community Skin Case", name = "Hotel Bell"},
-    ["Hourglass"] = {folder = "Community Skin Case", name = "Hourglass"},
-    ["Katana"] = {folder = "Community Skin Case", name = "Katana"},
-    ["Light Fifty"] = {folder = "Community Skin Case", name = "Light Fifty"},
-    ["Lightning Bolt"] = {folder = "Community Skin Case", name = "Lightning Bolt"},
-    ["Lollipop Hammer"] = {folder = "Community Skin Case", name = "Lollipop Hammer"},
-    ["Magic Wand"] = {folder = "Community Skin Case", name = "Magic Wand"},
-    ["Maracas"] = {folder = "Community Skin Case", name = "Maracas"},
-    ["Megaphone"] = {folder = "Community Skin Case", name = "Megaphone"},
-    ["Money Gun"] = {folder = "Community Skin Case", name = "Money Gun"},
-    ["Nail Gun"] = {folder = "Community Skin Case", name = "Nail Gun"},
-    ["Paper Planes"] = {folder = "Community Skin Case", name = "Paper Planes"},
-    ["Pencil Launcher"] = {folder = "Community Skin Case", name = "Pencil Launcher"},
-    ["Pencil"] = {folder = "Community Skin Case", name = "Pencil"},
-    ["Peppergun"] = {folder = "Community Skin Case", name = "Peppergun"},
-    ["Pinata Bat"] = {folder = "Community Skin Case", name = "Pinata Bat"},
-    ["Pizza Box"] = {folder = "Community Skin Case", name = "Pizza Box"},
-    ["Plunger"] = {folder = "Community Skin Case", name = "Plunger"},
-    ["Police Baton"] = {folder = "Community Skin Case", name = "Police Baton"},
-    ["Poseidon's Trident"] = {folder = "Community Skin Case", name = "Poseidon's Trident"},
-    ["Prismatic Hammer"] = {folder = "Community Skin Case", name = "Prismatic Hammer"},
-    ["Record Player"] = {folder = "Community Skin Case", name = "Record Player"},
-    ["Rubber Mallet"] = {folder = "Community Skin Case", name = "Rubber Mallet"},
-    ["Saxophone"] = {folder = "Community Skin Case", name = "Saxophone"},
-    ["Shuriken"] = {folder = "Community Skin Case", name = "Shurikens"},
-    ["Shurikens"] = {folder = "Community Skin Case", name = "Shurikens"},
-    ["Silly Guitar"] = {folder = "Community Skin Case", name = "Silly Guitar"},
-    ["Spatula"] = {folder = "Community Skin Case", name = "Spatula"},
-    ["Spray Bottle"] = {folder = "Community Skin Case", name = "Spray Bottle"},
-    ["Spring"] = {folder = "Community Skin Case", name = "Spring"},
-    ["Street Sign"] = {folder = "Community Skin Case", name = "Street Sign"},
-    ["Studio Light"] = {folder = "Community Skin Case", name = "Studio Light"},
-    ["Subspace Tripmine"] = {folder = "Community Skin Case", name = "Subspace Tripmine"},
-    ["Swordfish"] = {folder = "Community Skin Case", name = "Swordfish"},
-    ["Tape Measure"] = {folder = "Community Skin Case", name = "Tape Measure"},
-    ["The Ban Hammer"] = {folder = "Community Skin Case", name = "The Ban Hammer"},
-    ["Toaster"] = {folder = "Community Skin Case", name = "Toaster"},
-    ["Torch"] = {folder = "Community Skin Case", name = "Torch"},
-    ["Toy Hammer"] = {folder = "Community Skin Case", name = "Toy Hammer"},
-    ["Traffic Cone"] = {folder = "Community Skin Case", name = "Traffic Cone"},
-    ["Trampoline"] = {folder = "Community Skin Case", name = "Trampoline"},
-    ["Trophy Knife"] = {folder = "Community Skin Case", name = "Trophy Knife"},
-    ["Trumpet"] = {folder = "Community Skin Case", name = "Trumpet"},
-    ["Violin Crossbow"] = {folder = "Community Skin Case", name = "Violin Crossbow"},
-    ["War Horn"] = {folder = "Community Skin Case", name = "War Horn"},
-    ["Wrench"] = {folder = "Community Skin Case", name = "Wrench"}
-}
-
--- Fast Case-Insensitive Skin Model Finder
-local function findSkinModel(skinName)
-    local directMap = EXACT_SKIN_MAP[skinName]
-    if directMap and vm then
-        local f = vm:FindFirstChild(directMap.folder)
-        if f then
-            local inst = f:FindFirstChild(directMap.name)
-            if inst then return inst end
-            for _, c in ipairs(f:GetChildren()) do
-                if c.Name:lower() == directMap.name:lower() then return c end
-            end
-        end
-    end
-
-    if not vm then return nil end
-    local targetLower = skinName:lower()
-    for _, folder in ipairs(vm:GetChildren()) do
-        if folder.ClassName == "Folder" and folder.Name ~= "Weapons" then
-            local inst = folder:FindFirstChild(skinName)
-            if inst then return inst end
-            for _, c in ipairs(folder:GetChildren()) do
-                if c.Name:lower() == targetLower then return c end
-            end
-        end
-    end
-
-    local norm = targetLower:gsub("[%s%-%'%.]+", "")
-    for _, folder in ipairs(vm:GetChildren()) do
-        if folder.ClassName == "Folder" and folder.Name ~= "Weapons" then
-            for _, c in ipairs(folder:GetChildren()) do
-                if c.Name:lower():gsub("[%s%-%'%.]+", "") == norm then
-                    return c
-                end
-            end
-        end
-    end
-    return nil
+-- Vector slot navigation
+local ga = function(f)
+    if not f or not f.Address then return end
+    local n = rd(f.Address + OFF.Children)
+    if not n or n == 0 then return end
+    local b, e = rd(n), rd(n + 8)
+    if b and e then return b, e end
 end
 
-local memoryRestores = {}
-local soundCallbackRestores = {}
-
--- Safe atomic two-way pointer swap
-local function swapTwoWay(instA, instB, parentFolder)
-    if not instA or not instB or not instA.Address or not instB.Address then return false end
-    local a, b = instA.Address, instB.Address
-    if a == b then return false end
-
-    local folderA = instA.Parent or parentFolder
-    local folderB = instB.Parent or parentFolder
-
-    local slotA = findSlotAddress(instA, folderA)
-    local slotB = findSlotAddress(instB, folderB)
-    local origDefNC = rd(a + OFF.NameContainer)
-    local origSkinNC = rd(b + OFF.NameContainer)
-    local origDefParent = rd(a + OFF.Parent)
-    local origSkinParent = rd(b + OFF.Parent)
-
-    local origDefCtrl = slotA and rd(slotA + 8)
-    local origSkinCtrl = slotB and rd(slotB + 8)
-
-    table.insert(memoryRestores, {
-        defSlot = slotA,
-        skinSlot = slotB,
-        origDefInst = a,
-        origSkinInst = b,
-        origDefCtrl = origDefCtrl,
-        origSkinCtrl = origSkinCtrl,
-        defAddr = a,
-        skinAddr = b,
-        origDefNC = origDefNC,
-        origSkinNC = origSkinNC,
-        origDefParent = origDefParent,
-        origSkinParent = origSkinParent
-    })
-
-    if slotA then
-        wr(slotA, b)
-        if origSkinCtrl then wr(slotA + 8, origSkinCtrl) end
+local fs = function(b, e, t)
+    if not b or not e then return end
+    for i = 0, floor((e - b) / 16) - 1 do
+        local a = b + i * 16
+        if rd(a) == t then return a end
     end
-    if slotB then
-        wr(slotB, a)
-        if origDefCtrl then wr(slotB + 8, origDefCtrl) end
-    end
-    wr(a + OFF.NameContainer, origSkinNC)
-    wr(b + OFF.NameContainer, origDefNC)
-    wr(a + OFF.Parent, origSkinParent)
-    wr(b + OFF.Parent, origDefParent)
-    return true
 end
 
--- Model Rigging & Attachment Preservers
-local function fixCrossbowRig(m)
-    if not m then return end
-    local b = m:FindFirstChild("Body")
+-- One-way pointer replacement (icons.lua architecture)
+local function swc(parent, default, skin)
+    local b, e = ga(parent)
     if not b then return end
-    local p = b:FindFirstChild("Primary") or b:FindFirstChild("BodyPrimary") or b:FindFirstChildWhichIsA("BasePart")
-    if not p then return end
-    
-    for _, c in ipairs(m:GetChildren()) do
-        if c.Name == "Arch" or c.Name == "String" or c.Name:find("Arrow") or c.Name:find("Bow") or c.Name:find("Wing") then
-            local cp = (c.ClassName == "Model" and (c.PrimaryPart or c:FindFirstChild("Primary") or c:FindFirstChildWhichIsA("BasePart"))) or (c:IsA("BasePart") and c)
-            if cp and cp.Address and cp ~= p then
-                local w = c:FindFirstChild("BodyWeld") or c:FindFirstChild("SkinAttachmentWeld")
-                if not w and p.Address then
-                    local existingMotor = m:FindFirstChildWhichIsA("Motor6D", true)
-                    if existingMotor then
-                        pcall(function() existingMotor.Part0 = p end)
-                    end
-                end
-            end
-        end
-    end
+    local sl = fs(b, e, default.Address)
+    if not sl then return end
+    wr(skin.Address + OFF.Name, rd(default.Address + OFF.Name))
+    wr(skin.Address + OFF.Parent, parent.Address)
+    wr(sl, skin.Address)
 end
 
-local function fixBowRig(m)
-    if not m then return end
-    local b = m:FindFirstChild("Body")
-    if not b then return end
-    local p = b:FindFirstChild("Primary") or b:FindFirstChildWhichIsA("BasePart")
-    if not p then return end
-    for _, c in ipairs(m:GetChildren()) do
-        if c.Name:find("String") or c.Name:find("Arrow") or c.Name:find("Limb") then
-            if c:IsA("BasePart") and c.Address then
-                local m6d = m:FindFirstChild(c.Name .. "Joint") or m:FindFirstChildWhichIsA("Motor6D", true)
-                if m6d then
-                    pcall(function() m6d.Part0 = p end)
-                end
-            end
-        end
-    end
+local function swe(fn, cn, ba)
+    local f = ff(mi, fn)
+    if not f then return end
+    local d, k = ff(f, ba or "Default"), ff(f, cn)
+    if not d or not k then return end
+    if cn == (ba or "Default") then return end
+    swc(f, d, k)
 end
 
-local function fixRPGRig(m)
-    if not m then return end
-    local b = m:FindFirstChild("Body")
-    if not b then return end
-    local p = b:FindFirstChild("Primary") or b:FindFirstChildWhichIsA("BasePart")
-    if not p then return end
-    for _, c in ipairs(m:GetChildren()) do
-        if c.Name:find("Rocket") or c.Name:find("Missile") or c.Name:find("Key") then
-            if c:IsA("BasePart") and c.Address then
-                local m6d = m:FindFirstChildWhichIsA("Motor6D", true)
-                if m6d then
-                    pcall(function() m6d.Part0 = p end)
-                end
-            end
-        end
-    end
-end
-
-local function fixGrenadeRig(m)
-    if not m then return end
-    local b = m:FindFirstChild("Body") or m
-    local p = b:FindFirstChild("Primary") or b:FindFirstChildWhichIsA("BasePart")
-    if not p then return end
-    for _, c in ipairs(m:GetChildren()) do
-        if c.Name:find("Pin") or c.Name:find("Ring") or c.Name:find("Lever") or c.Name:find("Cap") then
-            if c:IsA("BasePart") and c.Address then
-                local m6d = m:FindFirstChildWhichIsA("Motor6D", true)
-                if m6d then
-                    pcall(function() m6d.Part0 = p end)
-                end
-            end
-        end
-    end
-end
-
-local function fixGunbladeRig(m)
-    if not m then return end
-    local b = m:FindFirstChild("Body")
-    if not b then return end
-    local p = b:FindFirstChild("Primary") or b:FindFirstChildWhichIsA("BasePart")
-    if not p then return end
-    for _, c in ipairs(m:GetChildren()) do
-        if c.Name:find("Blade") or c.Name:find("Sheath") or c.Name:find("Key") then
-            if c:IsA("BasePart") and c.Address then
-                local m6d = m:FindFirstChildWhichIsA("Motor6D", true)
-                if m6d then
-                    pcall(function() m6d.Part0 = p end)
-                end
-            end
-        end
-    end
-end
-
-local function fixKatanaRig(m)
-    if not m then return end
-    local b = m:FindFirstChild("Body")
-    if not b then return end
-    local p = b:FindFirstChild("Primary") or b:FindFirstChildWhichIsA("BasePart")
-    if not p then return end
-    for _, c in ipairs(m:GetChildren()) do
-        if c.Name:find("Sheath") or c.Name:find("Blade") or c.Name:find("Handle") or c.Name:find("Wing") then
-            if c:IsA("BasePart") and c.Address then
-                local m6d = m:FindFirstChildWhichIsA("Motor6D", true)
-                if m6d then
-                    pcall(function() m6d.Part0 = p end)
-                end
-            end
-        end
-    end
-end
-
-local function rigSkinModel(m)
-    if not m then return end
-    for _, sub in ipairs(m:GetChildren()) do
-        if sub.ClassName == "Model" then
-            if not sub:FindFirstChild("Primary") then
-                local firstPart = sub:FindFirstChildWhichIsA("BasePart")
-                if firstPart then
-                    pcall(function() sub.PrimaryPart = firstPart end)
-                end
-            else
-                pcall(function() sub.PrimaryPart = sub.Primary end)
-            end
-        end
-    end
-    
-    if m:FindFirstChild("Body") and m.Body:FindFirstChild("Primary") then
-        pcall(function() m.PrimaryPart = m.Body.Primary end)
-    elseif not m.PrimaryPart then
-        pcall(function() m.PrimaryPart = m:FindFirstChildWhichIsA("BasePart", true) end)
-    end
-    
-    for _, c in ipairs(m:GetChildren()) do
-        local n = c.Name:lower()
-        if n:find("shell") or n:find("%.r") or n:find("%.l") or n:find("sleeve") or n:find("juggle") then
-            if c.ClassName == "Model" then
-                pcall(function() c.Name = "_fake" end)
-            end
-        end
-    end
-end
-
--- Particle, Fire & Deflect Mappings from legacy engine
-local MISC_SPECIAL_MAP = {
-    ["Arch Molotov"] = { BurningEffects = "Arch Molotov", MolotovExplosionEffects = "Arch Molotov", FireHitboxes = "Arch Molotov" },
-    ["Ship In A Bottle"] = { BurningEffects = "Ship In A Bottle", MolotovExplosionEffects = "Ship In A Bottle", FireHitboxes = "Ship In A Bottle" },
-    ["Coffee"] = { BurningEffects = "Coffee", MolotovExplosionEffects = "Coffee", FireHitboxes = "Coffee" },
-    ["Vexed Candle"] = { BurningEffects = "Vexed Candle", MolotovExplosionEffects = "Vexed Candle", FireHitboxes = "Vexed Candle" },
-    ["Lava Lamp"] = { MolotovExplosionEffects = "Lava Lamp", FireHitboxes = "Lava Lamp" },
-    ["Hot Coals"] = { FireHitboxes = "Hot Coals" },
-    ["Arch Katana"] = { DeflectHitEffects = "Arch Katana", DeflectActiveEffects = "Arch Katana" },
-    ["Pixel Katana"] = { DeflectActiveEffects = "Pixel Katana" },
-    ["Keytana"] = { DeflectHitEffects = "Keytana", DeflectActiveEffects = "Keytana" },
-    ["Crystal Katana"] = { DeflectHitEffects = "Crystal Katana", DeflectActiveEffects = "Crystal Katana" },
-    ["New Year Katana"] = { DeflectHitEffects = "New Year Katana", DeflectActiveEffects = "New Year Katana" },
-    ["Stellar Katana"] = { DeflectHitEffects = "Stellar Katana", DeflectActiveEffects = "Stellar Katana" },
-    ["Evil Trident"] = { DeflectHitEffects = "Evil Trident", DeflectActiveEffects = "Evil Trident" },
-    ["Saber"] = { DeflectHitEffects = "Saber", DeflectActiveEffects = "Saber" },
-    ["Lightning Bolt"] = { DeflectHitEffects = "Lightning Bolt", DeflectActiveEffects = "Lightning Bolt" },
-    ["Keythrower"] = { BurningEffects = "Keythrower", FlamethrowerFlames = "Keythrower", FlamethrowerAirblasts = "Keythrower" },
-    ["Pixel Flamethrower"] = { BurningEffects = "Pixel Flamethrower", FlamethrowerFlames = "Pixel Flamethrower", FlamethrowerAirblasts = "Pixel Flamethrower" },
-    ["Jack O'Thrower"] = { BurningEffects = "Jack O'Thrower", FlamethrowerFlames = "Jack O'Thrower" },
-    ["Snowblower"] = { BurningEffects = "Snowblower", FlamethrowerFlames = "Snowblower" },
-    ["Rainbowthrower"] = { BurningEffects = "Rainbowthrower", FlamethrowerFlames = "Rainbowthrower" },
-    ["Glitterthrower"] = { BurningEffects = "Glitterthrower", FlamethrowerFlames = "Glitterthrower" },
-    ["Extinguisher"] = { BurningEffects = "Extinguisher", FlamethrowerFlames = "Extinguisher" },
+-- Special Misc Effects (Particles, JumpPads, Portals, Vortexes, Flames)
+local S = {
+    Snowglobe = { SmokeClouds = "Snowglobe" },
+    ["Emoji Cloud"] = { SmokeClouds = "Emoji Cloud" },
+    Balance = { SmokeClouds = "Balance" },
+    Eyeball = { SmokeClouds = "Eyeball" },
+    Hourglass = { SmokeClouds = "Hourglass" },
     ["Temporal Ray"] = { FreezeEffects = "Temporal" },
     ["Bubble Ray"] = { FreezeEffects = "Bubble" },
     ["Spider Ray"] = { FreezeEffects = "Cocoon" },
     ["Wrapped Freeze Ray"] = { FreezeEffects = "Wrapped" },
     ["Gum Ray"] = { FreezeEffects = "Gum" },
-    ["Snowglobe"] = { SmokeClouds = "Snowglobe" },
-    ["Emoji Cloud"] = { SmokeClouds = "Emoji Cloud" },
-    ["Balance"] = { SmokeClouds = "Balance" },
-    ["Eyeball"] = { SmokeClouds = "Eyeball" },
-    ["Hourglass"] = { SmokeClouds = "Hourglass" },
-    ["Trampoline"] = { JumpPads = "Trampoline" },
+    ["Pixel Flamethrower"] = { BurningEffects = "Pixel Flamethrower", FlamethrowerFlames = "Pixel Flamethrower", FlamethrowerAirblasts = "Pixel Flamethrower" },
+    ["Jack O'Thrower"] = { BurningEffects = "Jack O'Thrower", FlamethrowerFlames = "Jack O'Thrower" },
+    Keythrower = { BurningEffects = "Keythrower", FlamethrowerFlames = "Keythrower", FlamethrowerAirblasts = "Keythrower" },
+    Snowblower = { BurningEffects = "Snowblower", FlamethrowerFlames = "Snowblower" },
+    Blobsaw = { ChainsawParticles = "Chainsaw" },
+    Megaphone = { WarHornEffects = "Megaphone" },
+    Trampoline = { JumpPads = "Trampoline" },
     ["Bounce House"] = { JumpPads = "Bounce House" },
     ["Shady Chicken Sandwich"] = { JumpPads = "Shady Chicken Sandwich" },
     ["Glorious Jump Pad"] = { JumpPads = "Glorious Jump Pad" },
@@ -1195,26 +903,43 @@ local MISC_SPECIAL_MAP = {
     ["Frost Warper"] = { Portals = "Frost Warper" },
     ["Arcane Warper"] = { Portals = "Arcane Warper" },
     ["Hotel Bell"] = { Portals = "Hotel Bell" },
-    ["Bubbler"] = { Portals = "Bubbler" },
     ["Experiment D15"] = { Vortexes = "Distortion" },
     ["Cyber Distortion"] = { Vortexes = "Cyber Distortion" },
-    ["Sleighstortion"] = { Vortexes = "Sleighstortion" },
+    Sleighstortion = { Vortexes = "Sleighstortion" },
     ["Magma Distortion"] = { Vortexes = "Magma Distortion" },
     ["Plasma Distortion"] = { Vortexes = "Plasma Distortion" },
-    ["Bubble Distortion"] = { Vortexes = "Bubble Distortion" },
     ["Teleport Disc"] = { BlipEffects = "Teleport Disc" },
-    ["Warpeye"] = { BlipEffects = "Warpeye" },
+    Warpeye = { BlipEffects = "Warpeye" },
+    ["Evil Trident"] = { _d = "Evil Trident" },
+    Saber = { _d = "Saber" },
+    ["Lightning Bolt"] = { _d = "Lightning Bolt" },
+    ["New Year Katana"] = { _d = "New Year Katana" },
+    ["Stellar Katana"] = { _d = "Stellar Katana" },
+    ["Pixel Katana"] = { _d = "Default", DeflectActiveEffects = "Pixel Katana" },
+    ["Crystal Katana"] = { _d = "Crystal Katana" },
+    Coffee = { MolotovExplosionEffects = "Coffee", BurningEffects = "Coffee", FireHitboxes = "Coffee" },
+    ["Vexed Candle"] = { MolotovExplosionEffects = "Vexed Candle", BurningEffects = "Vexed Candle", FireHitboxes = "Vexed Candle" },
+    ["Arch Molotov"] = { BurningEffects = "Arch Molotov", MolotovExplosionEffects = "Arch Molotov", FireHitboxes = "Arch Molotov" },
+    ["Ship In A Bottle"] = { BurningEffects = "Ship In A Bottle", MolotovExplosionEffects = "Ship In A Bottle", FireHitboxes = "Ship In A Bottle" },
+    ["Lava Lamp"] = { MolotovExplosionEffects = "Lava Lamp", FireHitboxes = "Lava Lamp" },
+    ["Hot Coals"] = { FireHitboxes = "Hot Coals" },
+    ["Arch Katana"] = { _d = "Arch Katana" },
+    Keytana = { _d = "Keytana" },
+    Rainbowthrower = { BurningEffects = "Rainbowthrower", FlamethrowerFlames = "Rainbowthrower" },
+    Glitterthrower = { BurningEffects = "Glitterthrower", FlamethrowerFlames = "Glitterthrower" },
     ["Electropunk Warpstone"] = { BlipEffects = "Electropunk Warpstone" },
-    ["Warpstar"] = { BlipEffects = "Warpstar" },
-    ["Warpbone"] = { BlipEffects = "Warpbone" },
+    Warpstar = { BlipEffects = "Warpstar" },
+    Warpbone = { BlipEffects = "Warpbone" },
     ["Cyber Warpstone"] = { BlipEffects = "Cyber Warpstone" },
-    ["Wondergun"] = { MuzzleFlashes = "Wondergun" },
-    ["Singularity"] = { MuzzleFlashes = "Singularity" },
-    ["Midnight Festive Exogun"] = { MuzzleFlashes = "Midnight Festive Exogun" },
-    ["Repulsor"] = { MuzzleFlashes = "Repulsor" }
+    Wondergun = { _m = "Wondergun" },
+    Singularity = { _m = "Singularity" },
+    ["Midnight Festive Exogun"] = { _m = "Midnight Festive Exogun" },
+    Repulsor = { _m = "Repulsor" },
+    Extinguisher = { BurningEffects = "Extinguisher", FlamethrowerFlames = "Extinguisher" }
 }
 
-local MISC_EXPLOSIONS_MAP = {
+-- Explosion particle mappings
+local EX = {
     Wondergun = "WondergunExplosionParticles",
     Singularity = "SingularityExplosionParticles",
     ["Midnight Festive Exogun"] = "MidnightFestiveExogunExplosionParticles",
@@ -1231,78 +956,78 @@ local MISC_EXPLOSIONS_MAP = {
     ["Bubble Ray"] = "BubbleRayExplosionEffect",
     ["Spider Ray"] = "SpiderRayExplosionEffect",
     ["Temporal Ray"] = "TemporalRayExplosionEffect",
-    ["Wrapped Freeze Ray"] = "WrappedFreezeRayExplosionEffect",
-    RPKEY = "RPKEYExplosionEffect"
+    ["Wrapped Freeze Ray"] = "WrappedFreezeRayExplosionEffect"
 }
 
-local MISC_EXPLOSIONS_BASE = {
+local EXB = {
     Exogun = "ExogunExplosionParticles",
     Distortion = "DistortionExplosionParticles",
-    ["Freeze Ray"] = "FreezeRayExplosionEffect",
-    RPG = "ExplosionEffect"
+    ["Freeze Ray"] = "FreezeRayExplosionEffect"
 }
 
--- Sniper Custom Scopes
-local SCOPE_RETICLES = {
-    ["Pixel Sniper"] = {
-        blur = "rbxassetid://18171031143",
-        circle = "rbxassetid://18171045114"
-    },
-    Keyper = {
-        blur = "rbxassetid://129335242148588",
-        circle = "rbxassetid://81498448678518"
+local TH = { Flashbang = 1, Grenade = 1, Molotov = 1, ["Smoke Grenade"] = 1, Satchel = 1, Warpstone = 1 }
+local PR = { RPG = 1, Bow = 1, ["Grenade Launcher"] = 1, Slingshot = 1, ["Freeze Ray"] = 1, Daggers = 1, Crossbow = 1, ["Flare Gun"] = 1, Distortion = 1, Permafrost = 1 }
+
+local ops, ct = {}, 0
+for _, e in ipairs(en) do
+    local w, s = e[1], e[2]
+    local wI, sI = aW[w], sc[s]
+    if wI and sI then
+        -- Skip Satchel & RPG viewmodels to prevent engine vector desync
+        if w ~= "Satchel" and w ~= "RPG" then
+            ops[#ops + 1] = function() swc(wf, wI, sI); ct = ct + 1 end
+        end
+        local m = S[s]
+        if m then
+            for fn, cn in pairs(m) do
+                if fn == "_d" then
+                    ops[#ops + 1] = function() swe("DeflectHitEffects", cn); swe("DeflectActiveEffects", cn); ct = ct + 1 end
+                elseif fn == "_m" then
+                    ops[#ops + 1] = function() swe("MuzzleFlashes", cn, "Exogun"); ct = ct + 1 end
+                else
+                    ops[#ops + 1] = function() swe(fn, cn); ct = ct + 1 end
+                end
+            end
+        end
+        local xn = EX[s]
+        local xb = EXB[w]
+        if xn and xb then
+            ops[#ops + 1] = function()
+                local sx, dx = ff(mi, xn), ff(mi, xb)
+                if sx and dx then swc(mi, dx, sx); ct = ct + 1 end
+            end
+        end
+        if TH[w] and tf then
+            local tb, ts = ff(tf, w), ff(tf, s)
+            if tb and ts then ops[#ops + 1] = function() swc(tf, tb, ts); ct = ct + 1 end end
+        end
+        if PR[w] and pf then
+            local pb, p2 = ff(pf, w), ff(pf, s)
+            if pb and p2 then ops[#ops + 1] = function() swc(pf, pb, p2); ct = ct + 1 end end
+        end
+    end
+end
+
+-- MuzzleFlashes
+local mff = ff(mi, "MuzzleFlashes")
+if mff then
+    local MFB = {
+        Handgun = "Hand Gun", Spray = "Spray", Minigun = "Minigun",
+        ["Energy Pistols"] = "Energy Pistols", ["Energy Rifle"] = "Energy Rifle",
+        ["Paintball Gun"] = "Paintball Gun", Crossbow = "Crossbow", Warper = "Warper", Permafrost = "Permafrost"
     }
-}
-
--- Throwables and Projectiles mappings
-local THROWABLES_NAMES = {
-    Molotov = true, Grenade = true, Flashbang = true,
-    ["Smoke Grenade"] = true, Satchel = true, Warpstone = true
-}
-local PROJECTILES_NAMES = {
-    RPG = true, Bow = true, Crossbow = true, Slingshot = true,
-    ["Freeze Ray"] = true, Daggers = true, ["Flare Gun"] = true,
-    Distortion = true, Permafrost = true, ["Grenade Launcher"] = true
-}
-
-local _scriptAlive = true
-local ACTIVE_CONFIG_SKINS = {}
-
--- Native SoundCallbacks Redirection Engine
-local function applySoundCallbacks()
-    local rs = game:GetService("ReplicatedStorage")
-    local sc = rs:FindFirstChild("Modules") and rs.Modules:FindFirstChild("AnimationLibrary") and rs.Modules.AnimationLibrary:FindFirstChild("SoundCallbacks")
-    if not sc then return end
-    
-    local function pfx(n)
-        return n:lower():gsub("[%s%-%'%.]+", "")
-    end
-    
-    local abn = {}
-    for _, c in ipairs(sc:GetChildren()) do
-        abn[c.Name] = c
-    end
-    
-    for weaponName, skinTarget in pairs(ACTIVE_CONFIG_SKINS) do
-        local wp = pfx(weaponName)
-        local sp = pfx(skinTarget)
-        local spfx = wp .. "_" .. sp .. "_"
-        for name, inst in pairs(abn) do
-            if name:sub(1, #spfx) == spfx then
-                local suffix = name:sub(#spfx + 1)
-                local defInst = abn[wp .. "_" .. suffix]
-                if defInst and inst and defInst.Address and inst.Address and defInst.Address ~= inst.Address then
-                    local a = mrd("uintptr_t", defInst.Address + 0x8)
-                    local b = mrd("uintptr_t", inst.Address + 0x8)
-                    if a and b and a ~= b then
-                        table.insert(soundCallbackRestores, {
-                            defAddr = defInst.Address + 0x8,
-                            origDefVal = a,
-                            skinAddr = inst.Address + 0x8,
-                            origSkinVal = b
-                        })
-                        mwr("uintptr_t", defInst.Address + 0x8, b)
-                        mwr("uintptr_t", inst.Address + 0x8, a)
+    for _, e in ipairs(en) do
+        local w, s = e[1], e[2]
+        local mb = MFB[w]
+        if mb then
+            local md, mk = ff(mff, mb), ff(mff, s)
+            if md and mk and md ~= mk and md.Address and mk.Address then
+                local a, b = mrd("uintptr_t", md.Address + 0x8), mrd("uintptr_t", mk.Address + 0x8)
+                if a and b and a ~= b then
+                    ops[#ops + 1] = function()
+                        mwr("uintptr_t", md.Address + 0x8, b)
+                        mwr("uintptr_t", mk.Address + 0x8, a)
+                        ct = ct + 1
                     end
                 end
             end
@@ -1310,835 +1035,238 @@ local function applySoundCallbacks()
     end
 end
 
--- Active viewmodel beam and particle FX culler
-task.spawn(function()
-    local rs = game:GetService("ReplicatedStorage")
-    while _scriptAlive do
-        task.wait(0.3)
-        pcall(function()
-            local tempVM = rs:FindFirstChild("Assets") and rs.Assets:FindFirstChild("Temp") and rs.Assets.Temp:FindFirstChild("ViewModels")
-            if tempVM then
-                for _, activeVM in ipairs(tempVM:GetChildren()) do
-                    if activeVM.Name:find(LP.Name) then
-                        local hrp = activeVM:FindFirstChild("HumanoidRootPart")
-                        local isUnequipped = not hrp or hrp.Position.Magnitude < 1
-                        for _, desc in ipairs(activeVM:GetDescendants()) do
-                            if desc.ClassName == "Beam" or desc.ClassName == "ParticleEmitter" or desc.ClassName == "Trail" then
-                                if isUnequipped and desc.Enabled then
-                                    desc.Enabled = false
-                                elseif not isUnequipped and not desc.Enabled then
-                                    desc.Enabled = true
-                                end
-                            end
-                        end
-                    end
-                end
-            end
-        end)
-    end
-end)
+-- Execute all memory operations
+for _, op in ipairs(ops) do
+    pcall(op)
+end
 
--- Ultra-Precise Wing Coordinate Matrices (extracted directly from official assets)
-local KATANA_WINGS1_CFS = {
-    CFrame.new(0.0002, 0.7842, 0.3093, -0.0000, 0.0000, -1.0000, 0.0000, 1.0000, 0.0000, 1.0000, 0.0000, -0.0000),
-    CFrame.new(0.0002, 0.7051, 0.5293, -0.0000, 0.0000, -1.0000, 0.0000, 1.0000, 0.0000, 1.0000, 0.0000, -0.0000),
-    CFrame.new(0.0002, 0.4365, 0.2489, -0.0000, 0.0000, -1.0000, 0.0000, 1.0000, 0.0000, 1.0000, 0.0000, -0.0000),
-    CFrame.new(0.0002, 0.5693, 0.4387, -0.0000, 0.0000, -1.0000, 0.0000, 1.0000, 0.0000, 1.0000, 0.0000, -0.0000),
-    CFrame.new(0.0002, 0.9033, 0.6045, -0.0000, 0.0000, -1.0000, 0.0000, 1.0000, 0.0000, 1.0000, 0.0000, -0.0000),
-    CFrame.new(0.0002, 1.1191, 0.5842, -0.0000, 0.0000, -1.0000, 0.0000, 1.0000, 0.0000, 1.0000, 0.0000, -0.0000),
-    CFrame.new(0.0002, 0.4941, 0.3402, -0.0000, 0.0000, -1.0000, 0.0000, 1.0000, 0.0000, 1.0000, 0.0000, -0.0000),
-    CFrame.new(0.0002, 0.8711, 0.4950, 1.0000, 0.0000, 0.0000, 0.0000, 1.0000, 0.0000, 0.0000, 0.0000, 1.0000)
+print("[RivalsSkinChanger] Successfully applied " .. tostring(ct) .. " skin swaps!")
+notifyUser("Rivals Skin Changer", "Applied " .. tostring(ct) .. " skin swaps!", 4)
+
+-- 2D HUD & Equipment Icon Engine (icons.lua architecture)
+local SP = {
+    ["Pixel Sniper"] = {"rbxassetid://18171031143", "rbxassetid://18171045114"},
+    Keyper = {"rbxassetid://129335242148588", "rbxassetid://81498448678518"}
 }
 
-local KATANA_WINGS2_CFS = {
-    CFrame.new(0.0002, 0.7842, -0.2913, 0.0000, 0.0000, 1.0000, 0.0000, 1.0000, 0.0000, -1.0000, 0.0000, 0.0000),
-    CFrame.new(0.0002, 0.7051, -0.5112, 0.0000, 0.0000, 1.0000, 0.0000, 1.0000, 0.0000, -1.0000, 0.0000, 0.0000),
-    CFrame.new(0.0002, 0.4365, -0.2307, 0.0000, 0.0000, 1.0000, 0.0000, 1.0000, 0.0000, -1.0000, 0.0000, 0.0000),
-    CFrame.new(0.0002, 0.5693, -0.4207, 0.0000, 0.0000, 1.0000, 0.0000, 1.0000, 0.0000, -1.0000, 0.0000, 0.0000),
-    CFrame.new(0.0002, 0.9033, -0.5864, 0.0000, 0.0000, 1.0000, 0.0000, 1.0000, 0.0000, -1.0000, 0.0000, 0.0000),
-    CFrame.new(0.0002, 1.1191, -0.5662, 0.0000, 0.0000, 1.0000, 0.0000, 1.0000, 0.0000, -1.0000, 0.0000, 0.0000),
-    CFrame.new(0.0002, 0.4941, -0.3221, 0.0000, 0.0000, 1.0000, 0.0000, 1.0000, 0.0000, -1.0000, 0.0000, 0.0000),
-    CFrame.new(0.0002, 0.8711, -0.4769, 1.0000, 0.0000, 0.0000, 0.0000, 1.0000, 0.0000, 0.0000, 0.0000, 1.0000)
-}
-
-local UZI_WING1_CFS = {
-    CFrame.new(0.2378, 0.3091, -0.5935, 0.4226, 0.5825, 0.6943, 0.0000, 0.7661, -0.6428, -0.9063, 0.2716, 0.3237),
-    CFrame.new(0.2371, 0.3089, -0.5945, 0.4226, 0.5825, 0.6943, 0.0000, 0.7661, -0.6428, -0.9063, 0.2716, 0.3237)
-}
-
-local UZI_WING2_CFS = {
-    CFrame.new(-0.2374, 0.3092, -0.5944, -0.4226, 0.5825, 0.6943, -0.0000, 0.7661, -0.6428, -0.9063, -0.2716, -0.3237),
-    CFrame.new(-0.2384, 0.3089, -0.5944, -0.4226, 0.5825, 0.6943, -0.0000, 0.7661, -0.6428, -0.9063, -0.2716, -0.3237)
-}
-
-local lastEquippedWeapon = nil
-local function alignWeaponWings()
-    local fp = workspace:FindFirstChild("ViewModels") and workspace.ViewModels:FindFirstChild("FirstPerson")
-    if not fp then return end
-    
-    for _, vmInst in ipairs(fp:GetChildren()) do
-        local wName = vmInst.Name:match("%-%s*(.-)%s*%-") or vmInst.Name:match(LP.Name .. "%s*%-%s*(.-)%s*$")
-        if wName and wName ~= lastEquippedWeapon then
-            lastEquippedWeapon = wName
-        end
-
-        local iv = vmInst:FindFirstChild("ItemVisual")
-        if iv then
-            local body = iv:FindFirstChild("Body") or iv:FindFirstChild("Model")
-            local bp = body and (body:FindFirstChild("Primary") or body:FindFirstChild("BodyPrimary"))
-            if bp then
-                local bcf = bp.CFrame
-                
-                -- Uzi Wings
-                local uw1 = iv:FindFirstChild("Wing1")
-                local uw2 = iv:FindFirstChild("Wing2")
-                if uw1 and uw2 then
-                    local idx1 = 1
-                    for _, c in ipairs(uw1:GetChildren()) do
-                        if c.ClassName == "MeshPart" or c.ClassName == "Part" then
-                            local cf = UZI_WING1_CFS[idx1] or UZI_WING1_CFS[2]
-                            if cf then c.CFrame = bcf * cf end
-                            idx1 = idx1 + 1
-                        end
-                    end
-                    local idx2 = 1
-                    for _, c in ipairs(uw2:GetChildren()) do
-                        if c.ClassName == "MeshPart" or c.ClassName == "Part" then
-                            local cf = UZI_WING2_CFS[idx2] or UZI_WING2_CFS[2]
-                            if cf then c.CFrame = bcf * cf end
-                            idx2 = idx2 + 1
-                        end
-                    end
-                end
-
-                -- Katana Wings
-                local kw1 = iv:FindFirstChild("Wings1")
-                local kw2 = iv:FindFirstChild("Wings2")
-                if kw1 and kw2 then
-                    local idx1 = 1
-                    for _, c in ipairs(kw1:GetChildren()) do
-                        if c.ClassName == "MeshPart" or c.ClassName == "Part" then
-                            local cf = KATANA_WINGS1_CFS[idx1]
-                            if cf then c.CFrame = bcf * cf end
-                            idx1 = idx1 + 1
-                        end
-                    end
-                    local idx2 = 1
-                    for _, c in ipairs(kw2:GetChildren()) do
-                        if c.ClassName == "MeshPart" or c.ClassName == "Part" then
-                            local cf = KATANA_WINGS2_CFS[idx2]
-                            if cf then c.CFrame = bcf * cf end
-                            idx2 = idx2 + 1
-                        end
-                    end
-                end
-            end
-        end
+local ic, pi, spd = {}, {}, nil
+for _, e in ipairs(en) do
+    local w, s = e[1], e[2]
+    if IL[w] and IL[w][s] then
+        local id = IL[w][s]
+        local b = {}
+        for j = 1, #id do b[j] = byte(id, j) end
+        ic[#ic + 1] = {w = w, id = id, b = b, l = #id}
+    end
+    if w == "Sniper" and SP[s] and not spd then
+        local bl, cl = SP[s][1], SP[s][2]
+        local bb, cb = {}, {}
+        for j = 1, #bl do bb[j] = byte(bl, j) end
+        for j = 1, #cl do cb[j] = byte(cl, j) end
+        spd = {bb = bb, bl = #bl, cb = cb, cl = #cl, bi = bl, ci = cl}
     end
 end
 
--- Robust Bullet, Reload, and Inspect Sound Replacement Table
-local SOUND_REPLACEMENTS = {
-    ["13236548545"] = { primary = "rbxassetid://17662574783", secondary = "rbxassetid://18764343961" },
-    ["13236548480"] = { primary = "rbxassetid://90757583550672", secondary = "rbxassetid://110122962237431" },
-    ["13455395017"] = { primary = "rbxassetid://18887149414" },
-    ["13236549929"] = { primary = "rbxassetid://18887149414", volume = 0 },
-    ["13236549962"] = { primary = "rbxassetid://18887149414", volume = 0 },
-    ["13270206222"] = { primary = "rbxassetid://17672502566", secondary = "rbxassetid://124463680760542" },
-    ["13270206087"] = { primary = "rbxassetid://77109116351775", volume = 0.8 },
-    ["13455229044"] = { primary = "rbxassetid://113227486192611" },
-    ["13455229188"] = { primary = "rbxassetid://17672502879" },
-    ["13455394948"] = { primary = "rbxassetid://17672502716" },
-    ["13269929260"] = { primary = "rbxassetid://17672502716" },
-    ["13269934368"] = { primary = "rbxassetid://17672502879" },
-    ["13642104835"] = { primary = "rbxassetid://113227486192611", secondary = "rbxassetid://17672502879" },
-    ["14417089307"] = { primary = "rbxassetid://104731232227748", secondary = "rbxassetid://13483008798" },
-    ["14417089152"] = { primary = "rbxassetid://104731232227748", volume = 0 },
-    ["14417088974"] = { primary = "rbxassetid://104731232227748", volume = 0 },
-    ["13087405232"] = { primary = "rbxassetid://104731232227748", secondary = "rbxassetid://14457782622" },
-    ["14240943641"] = { primary = "rbxassetid://14457783670" },
-    ["14240944488"] = { primary = "rbxassetid://14457783670", volume = 0 },
-    ["14240944327"] = { primary = "rbxassetid://14457783670", volume = 0 },
-    ["13087406981"] = { primary = "rbxassetid://14457783670" },
-    ["82715240396507"] = { primary = "rbxassetid://81230732872783" },
-    ["15132679812"] = { primary = "rbxassetid://81230732872783" },
-    ["13682532502"] = { primary = "rbxassetid://114610550422028" },
-    ["76155503538875"] = { primary = "rbxassetid://114610550422028", volume = 0 },
-    ["15132681423"] = { primary = "rbxassetid://114610550422028" },
-    ["13087410000"] = { primary = "rbxassetid://13087362838", secondary = "rbxassetid://90757583550672" },
-    ["13160326139"] = { primary = "rbxassetid://110122962237431", secondary = "rbxassetid://71387264231358" },
-    ["96886470957330"] = { primary = "rbxassetid://135836738518083", secondary = "rbxassetid://115657023572170" },
-    ["13479562219"] = { primary = "rbxassetid://115657023572170", secondary = "rbxassetid://96253147006478" },
-    ["13515046921"] = { primary = "rbxassetid://96253147006478", volume = 0.5 },
-    ["13515046988"] = { primary = "rbxassetid://96253147006478", volume = 0.5 },
-    ["14522189766"] = { primary = "rbxassetid://96253147006478", secondary = "rbxassetid://14522189766" },
-    ["13158735106"] = { primary = "rbxassetid://18179281854" },
-    ["16526185100"] = { primary = "rbxassetid://16526185100", secondary = "rbxassetid://90757583550672" },
-    ["16526184479"] = { primary = "rbxassetid://16526184479", secondary = "rbxassetid://110122962237431" },
-    ["13744359504"] = { primary = "rbxassetid://110122962237431" },
-    ["17209245734"] = { primary = "rbxassetid://17209245734", secondary = "rbxassetid://129124742663895" },
-    ["90757583550672"] = { primary = "rbxassetid://90757583550672" },
-    ["14812827622"] = { primary = "rbxassetid://72790275842437" },
-    ["14812827928"] = { primary = "rbxassetid://72790275842437" },
-    ["10730819"] = { primary = "rbxassetid://10730819" },
-    ["132455961912409"] = { primary = "rbxassetid://132455961912409" },
-    ["13159969353"] = { primary = "rbxassetid://108879620126710", secondary = "rbxassetid://86510987016114" },
-    ["13968137196"] = { primary = "rbxassetid://118906938239363" },
-    ["14776414133"] = { primary = "rbxassetid://86510987016114" },
-    ["14776437962"] = { primary = "rbxassetid://14000023581" },
-    ["82797934287631"] = { primary = "rbxassetid://82797934287631" },
-}
-
-local function hookSound(sound)
-    if not sound or sound.ClassName ~= "Sound" then return end
-    local id = sound.SoundId:match("%d+")
-    if not id then return end
-    local repl = SOUND_REPLACEMENTS[id] or SOUND_REPLACEMENTS["rbxassetid://" .. id]
-    if repl then
-        sound.SoundId = repl.primary
-        if repl.volume then sound.Volume = repl.volume end
-        if repl.pitch then sound.PlaybackSpeed = repl.pitch end
-    end
-end
-
-local soundConnections = {}
-pcall(function()
-    local ss = game:GetService("SoundService")
-    if ss then
-        for _, s in ipairs(ss:GetDescendants()) do
-            if s.ClassName == "Sound" then hookSound(s) end
-        end
-        table.insert(soundConnections, ss.DescendantAdded:Connect(function(s)
-            if s.ClassName == "Sound" then hookSound(s) end
-        end))
-    end
-    table.insert(soundConnections, workspace.DescendantAdded:Connect(function(s)
-        if s.ClassName == "Sound" then hookSound(s) end
-    end))
-end)
-
-task.spawn(function()
-    while _scriptAlive do
-        task.wait(0.1)
-        pcall(function()
-            local fp = workspace:FindFirstChild("ViewModels") and workspace.ViewModels:FindFirstChild("FirstPerson")
-            if fp then
-                for _, vmInst in ipairs(fp:GetChildren()) do
-                    for _, s in ipairs(vmInst:GetDescendants()) do
-                        if s.ClassName == "Sound" then hookSound(s) end
-                    end
-                end
-            end
-        end)
-    end
-end)
-
--- Custom Animation Engine (Event Horizon Reload / Inspect & Arch Katana Inspect)
-local sampleAnimInstance = nil
-local function getSampleAnim()
-    if sampleAnimInstance and sampleAnimInstance.Parent then return sampleAnimInstance end
-    for _, d in ipairs(LP:GetDescendants()) do
-        if d.ClassName == "Animation" then sampleAnimInstance = d return d end
-    end
-    local rs = game:GetService("ReplicatedStorage")
-    for _, d in ipairs(rs:GetDescendants()) do
-        if d.ClassName == "Animation" then sampleAnimInstance = d return d end
-    end
-    return nil
-end
-
-local function playCustomTrack(animator, assetId, speed)
-    local sample = getSampleAnim()
-    if not animator or not sample then return nil end
-    local a = sample:Clone()
-    a.AnimationId = assetId
-    local ok, track = pcall(animator.LoadAnimation, animator, a)
-    if ok and track then
-        track:Play(0.1, 1, speed or 1)
-        return track
-    end
-    return nil
-end
-
-local uisConn = nil
-pcall(function()
-    local uis = game:GetService("UserInputService")
-    uisConn = uis.InputBegan:Connect(function(input, gpe)
-        if gpe then return end
-        local fp = workspace:FindFirstChild("ViewModels") and workspace.ViewModels:FindFirstChild("FirstPerson")
-        if not fp then return end
-        for _, vmInst in ipairs(fp:GetChildren()) do
-            local wName = vmInst.Name:match("%-%s*(.-)%s*%-") or vmInst.Name:match(LP.Name .. "%s*%-%s*(.-)%s*$")
-            local ac = vmInst:FindFirstChild("AnimationController") or vmInst:FindFirstChildWhichIsA("AnimationController")
-            local animator = ac and (ac:FindFirstChild("Animator") or ac:FindFirstChildWhichIsA("Animator"))
-            
-            if wName == "Sniper" and animator then
-                if input.KeyCode == Enum.KeyCode.R then
-                    playCustomTrack(animator, "rbxassetid://121991964753861", 1.43)
-                elseif input.KeyCode == Enum.KeyCode.F then
-                    playCustomTrack(animator, "rbxassetid://89426100452654", 1)
-                end
-            elseif wName == "Katana" and animator then
-                if input.KeyCode == Enum.KeyCode.F then
-                    playCustomTrack(animator, "rbxassetid://119980219668284", 1)
-                end
-            end
-        end
-    end)
-end)
-
--- In-Game Alert / Notification System
-local function notifyUser(title, text, duration)
-    duration = duration or 8
-    if typeof(notify) == "function" then
-        pcall(notify, text, title, duration)
-    end
-    pcall(function()
-        game:GetService("StarterGui"):SetCore("SendNotification", {
-            Title = title,
-            Text = text,
-            Duration = duration
-        })
-    end)
-end
-
--- Robust Config Line Parser
-local function parseConfigLine(rawLine)
-    local l = rawLine:gsub(string.char(13), ""):gsub(string.char(10), ""):match("^%s*(.-)%s*$")
-    if not l or #l == 0 or l:sub(1, 2) == "--" or l:sub(1, 1) == "#" or l == "return {" or l == "}" then
-        return nil, nil
-    end
-    
-    local sep = l:find("=") or l:find(":")
-    if not sep then return nil, nil end
-    
-    local w = l:sub(1, sep - 1):match("^%s*(.-)%s*$")
-    local s = l:sub(sep + 1):match("^%s*(.-)%s*$")
-    if not w or not s then return nil, nil end
-    
-    -- Strip trailing commas or semicolons
-    s = s:gsub("[,;]+$", ""):match("^%s*(.-)%s*$")
-    
-    -- Strip brackets
-    w = w:gsub('^%["', ''):gsub('"%]$', ''):gsub("^%['", ''):gsub("'%]$", ''):gsub('^%[', ''):gsub('%]$', '')
-    
-    -- Strip outer quotes
-    w = w:gsub('^"', ''):gsub('"$', ''):gsub("^'", ''):gsub("'$", ''):match("^%s*(.-)%s*$")
-    s = s:gsub('^"', ''):gsub('"$', ''):gsub("^'", ''):gsub("'$", ''):match("^%s*(.-)%s*$")
-    
-    if w and s and #w > 0 and #s > 0 then
-        return w, s
-    end
-    return nil, nil
-end
-
--- Main ultra-fast skin swapper with comprehensive error diagnostics
-local function applySkinSwapper()
-    if not isfile or not readfile then
-        return 0, "Executor does not support isfile/readfile functions."
-    end
-    
-    -- Search all possible candidate paths in workspace
-    local candidatePaths = {
-        "rivals_config.lua",
-        "workspace/rivals_config.lua",
-        "rivals_config.lua.txt",
-        "rivals_config.txt",
-        "workspace/rivals_config.txt",
-        "rivals_config (1).lua",
-        "rivals_config(1).lua",
-        "Rivals_Config.lua",
-        "rivals_config"
-    }
-
-    if typeof(listfiles) == "function" then
-        pcall(function()
-            for _, folder in ipairs({"", "workspace"}) do
-                local files = listfiles(folder) or {}
-                for _, f in ipairs(files) do
-                    local clean = f:lower():gsub(string.char(92), "/")
-                    if clean:find("rivals_config") then
-                        table.insert(candidatePaths, 1, f)
-                    end
-                end
-            end
-        end)
-    end
-    
-    local targetFile = nil
-    for _, path in ipairs(candidatePaths) do
-        local ok, exists = pcall(isfile, path)
-        if ok and exists then
-            targetFile = path
+for sid, w in pairs(IS) do
+    for _, e in ipairs(en) do
+        if e[1] == w and IL[w] and IL[w][e[2]] then
+            local id = IL[w][e[2]]
+            local b = {}
+            for j = 1, #id do b[j] = byte(id, j) end
+            pi[sid] = {b = b, l = #id}
             break
         end
     end
-    
-    if not targetFile then
-        return 0, "rivals_config.lua was not found in your executor's workspace folder! Make sure rivals_config.lua is placed in your workspace directory."
-    end
-    
-    local okRead, r2 = pcall(readfile, targetFile)
-    if not okRead or not r2 then
-        return 0, "Failed to read file '" .. tostring(targetFile) .. "'. File may be locked by another application."
-    end
-    
-    -- Strip UTF-8 BOM if present
-    if r2:sub(1, 3) == string.char(239, 187, 191) then
-        r2 = r2:sub(4)
-    end
-    
-    if #r2:gsub("%s+", "") == 0 then
-        return 0, "Config file '" .. tostring(targetFile) .. "' is completely empty (0 bytes). Please generate your config on the website."
-    end
-
-    if not wf then
-        return 0, "Game assets folder (ViewModels.Weapons) is not loaded yet. Are you in a match or shooting range?"
-    end
-
-    local parsedPairs = 0
-    local nonDefaultPairs = 0
-    local missingBaseWeapons = {}
-    local missingSkinModels = {}
-    local swappedCount = 0
-
-    for _, rawLine in ipairs(r2:split(string.char(10))) do 
-        local weaponName, skinTarget = parseConfigLine(rawLine)
-        if weaponName and skinTarget then
-            parsedPairs = parsedPairs + 1
-            local skinLower = skinTarget:lower()
-            if skinLower ~= "default" and skinLower ~= "standard" then
-                nonDefaultPairs = nonDefaultPairs + 1
-                ACTIVE_CONFIG_SKINS[weaponName] = skinTarget
-                
-                -- 1. Viewmodel 3D Model Memory Swapping
-                local defModel = wf:FindFirstChild(weaponName)
-                if not defModel then
-                    table.insert(missingBaseWeapons, weaponName)
-                else
-                    local skinModel = findSkinModel(skinTarget)
-                    if not skinModel then
-                        table.insert(missingSkinModels, skinTarget)
-                    else
-                        if defModel.Address and skinModel.Address and defModel.Address ~= skinModel.Address then
-                            rigSkinModel(skinModel)
-                            
-                            local weaponLower = weaponName:lower()
-                            if weaponLower:find("crossbow") or skinLower:find("crossbow") then
-                                pcall(fixCrossbowRig, skinModel)
-                            elseif weaponLower:find("bow") or skinLower:find("bow") then
-                                pcall(fixBowRig, skinModel)
-                            elseif weaponLower:find("rpg") or skinLower:find("rpkey") or skinLower:find("rocket") then
-                                pcall(fixRPGRig, skinModel)
-                            elseif weaponLower == "grenade" or skinLower:find("nade") or skinLower:find("bomb") then
-                                pcall(fixGrenadeRig, skinModel)
-                            elseif weaponLower == "gunblade" or skinLower:find("gunblade") or skinLower:find("blade") then
-                                pcall(fixGunbladeRig, skinModel)
-                            elseif weaponLower == "katana" or skinLower:find("katana") then
-                                pcall(fixKatanaRig, skinModel)
-                            end
-                            
-                            if swapTwoWay(defModel, skinModel, wf) then
-                                swappedCount = swappedCount + 1
-                            end
-                        end
-                    end
-                end
-                
-                -- 2. Throwables 3D Model Swapping (Molotov, Grenade, Flashbang, Satchel, Warpstone)
-                if tf and THROWABLES_NAMES[weaponName] then
-                    local tb = tf:FindFirstChild(weaponName)
-                    local ts = tf:FindFirstChild(skinTarget)
-                    if tb and ts then
-                        swapTwoWay(tb, ts, tf)
-                    end
-                end
-                
-                -- 3. Projectiles 3D Model Swapping (RPG, Bow, Crossbow, Slingshot, Freeze Ray, Distortion, Permafrost)
-                if pf and PROJECTILES_NAMES[weaponName] then
-                    local pb = pf:FindFirstChild(weaponName)
-                    local ps = pf:FindFirstChild(skinTarget)
-                    if pb and ps then
-                        swapTwoWay(pb, ps, pf)
-                    end
-                end
-                
-                -- 4. Misc Effects (Ground Fire, Explosions, Deflect FX, Flames, Portals)
-                if mi then
-                    local spec = MISC_SPECIAL_MAP[skinTarget]
-                    if spec then
-                        for folderName, itemName in pairs(spec) do
-                            local folder = mi:FindFirstChild(folderName)
-                            if folder then
-                                local defItem = folder:FindFirstChild("Default") or folder:FindFirstChild(weaponName)
-                                local skinItem = folder:FindFirstChild(itemName)
-                                if defItem and skinItem then
-                                    swapTwoWay(defItem, skinItem, folder)
-                                end
-                            end
-                        end
-                    end
-                    
-                    -- Explosion particles in Misc
-                    local expSkin = MISC_EXPLOSIONS_MAP[skinTarget]
-                    local expBase = MISC_EXPLOSIONS_BASE[weaponName]
-                    if expSkin and expBase then
-                        local sx = mi:FindFirstChild(expSkin)
-                        local dx = mi:FindFirstChild(expBase)
-                        if sx and dx then
-                            swapTwoWay(dx, sx, mi)
-                        end
-                    end
-                end
-            end
-        end 
-    end
-    
-    -- 5. Native SoundCallbacks Redirection
-    pcall(applySoundCallbacks)
-    
-    if swappedCount == 0 then
-        if parsedPairs == 0 then
-            return 0, "Found '" .. tostring(targetFile) .. "', but no valid Weapon=Skin lines were detected! Check file format."
-        elseif nonDefaultPairs == 0 then
-            return 0, "All " .. parsedPairs .. " weapons in '" .. tostring(targetFile) .. "' are set to Default. Please select at least one custom skin on the site."
-        elseif #missingBaseWeapons > 0 and #missingSkinModels == 0 then
-            return 0, "Base weapons (" .. table.concat(missingBaseWeapons, ", ") .. ") not found in game folder."
-        elseif #missingSkinModels > 0 then
-            return 0, "Skin models not found in game assets: " .. table.concat(missingSkinModels, ", ")
-        else
-            return 0, "Memory swap failed. Ensure memory read/write permissions are allowed in executor."
-        end
-    end
-
-    return swappedCount, nil
 end
 
--- Run swapper with error detection and reporting
-local count, errorReason = applySkinSwapper()
-local elapsed = math.floor((tick() - t_start) * 1000)
+local ni = #ic
 
-if count == 0 then
-    local errText = errorReason or "Unknown error while loading skins."
-    warn("[RivalsSkinChanger] ==================================================")
-    warn("[RivalsSkinChanger] ERROR: 0 SKINS LOADED!")
-    warn("[RivalsSkinChanger] Details: " .. errText)
-    warn("[RivalsSkinChanger] ==================================================")
-    notifyUser("Rivals Skin Changer Error", "0 Skins Loaded: " .. errText, 10)
-else
-    local msg = "Swapped " .. tostring(count) .. " skins in " .. tostring(elapsed) .. "ms!"
-    print("[RivalsSkinChanger] " .. msg)
+-- In-place 4-byte fast integer string writer
+local function wr2(a, p, b, l)
+    local i = 1
+    while i + 3 <= l do
+        mwr("int", p + i - 1, b[i] + b[i+1]*256 + b[i+2]*65536 + b[i+3]*16777216)
+        i = i + 4
+    end
+    while i <= l do
+        mwr("uint8_t", p + i - 1, b[i])
+        i = i + 1
+    end
+    mwr("uint8_t", p + l, 0)
+    mwr("int", a + 0xA20, l)
+    mwr("int", a + 0xA28, l)
 end
 
--- Real-time 2D Icon Engine
-local function replaceStandardIcon(label)
-    if not label or not label.Address then return end
-    local ptr = mrd("uintptr_t", label.Address + IMG_OFF)
-    if not ptr or ptr < 0x10000000000 or ptr > 0x7FFFFFFFFFFF then return end
-    local cur = mrd("string", ptr)
-    if not cur then return end
-    local weaponName = STANDARD_ICON_MAP[cur]
-    if weaponName and ACTIVE_CONFIG_SKINS[weaponName] then
-        local skinTarget = ACTIVE_CONFIG_SKINS[weaponName]
-        local skinIcon = ITEM_ICONS[weaponName] and (ITEM_ICONS[weaponName][skinTarget] or ITEM_ICONS[weaponName][skinTarget:lower()])
-        if skinIcon and skinIcon ~= cur then
-            writeImage(label, skinIcon)
-        end
-    end
+local function swi(t)
+    if not t or not t.Address then return end
+    local a = t.Address
+    local p = mrd("uintptr_t", a + 0xA18)
+    if not p or p == 0 then return end
+    local c = mrd("string", p)
+    if not c then return end
+    local d = pi[c]
+    if not d then return end
+    local cp = mrd("int", a + 0xA30)
+    if not cp or d.l > cp then return end
+    wr2(a, p, d.b, d.l)
 end
 
--- ZERO-LATENCY GUI Synchronizer Engine (RenderStepped + DescendantAdded)
-local runService = game:GetService("RunService")
-local renderSteppedConn = nil
-local pgDescConn = nil
+local ln = LP.Name
+local hbc, hbr, hbd = {}, nil, {}
+local mf = nil
 
-local function fastSyncGui()
-    if not _scriptAlive or not game:IsLoaded() or not LP or not LP.Parent or not LP:IsDescendantOf(game) then return end
-    pcall(alignWeaponWings)
-    local pg = LP:FindFirstChild("PlayerGui")
-    local mg = pg and pg:FindFirstChild("MainGui")
-    local mf = mg and mg:FindFirstChild("MainFrame")
-    if not mf then return end
-    
-    -- 1. Hotbar Slots & EquippedDisplay (0ms frame-accurate replacement)
-    local fi = mf:FindFirstChild("FighterInterfaces")
-    local lni = fi and fi:FindFirstChild(LP.Name)
-    if lni then
-        local sub = lni:FindFirstChild("BottomRight") or lni:FindFirstChild("BottomCenter") or lni:FindFirstChild("BottomLeft")
-        local c = sub and sub:FindFirstChild("Container")
-        local hb = c and c:FindFirstChild("Hotbar")
-        local cont = hb and hb:FindFirstChild("Container")
-        if cont then
-            for _, slot in ipairs(cont:GetChildren()) do
-                if slot.ClassName == "Frame" then
-                    if slot.Name == "EquippedDisplay" then
-                        local c2 = slot:FindFirstChild("Container")
-                        local w2 = c2 and c2:FindFirstChild("Weapon")
-                        local iconLabel = w2 and w2:FindFirstChild("Icon")
-                        if iconLabel and iconLabel.ClassName == "ImageLabel" and lastEquippedWeapon then
-                            local skinTarget = ACTIVE_CONFIG_SKINS[lastEquippedWeapon]
-                            if skinTarget then
-                                local skinIcon = ITEM_ICONS[lastEquippedWeapon] and (ITEM_ICONS[lastEquippedWeapon][skinTarget] or ITEM_ICONS[lastEquippedWeapon][skinTarget:lower()])
-                                if skinIcon then
-                                    writeImage(iconLabel, skinIcon)
-                                end
-                            end
-                        end
-                    elseif slot.Name ~= "KeybindGamepadEquipLast" and slot.Name ~= "KeybindGamepadEquipNext" and slot.Name ~= "Layout" then
-                        local weaponName = slot.Name
-                        local skinTarget = ACTIVE_CONFIG_SKINS[weaponName]
-                        if skinTarget then
-                            local skinIcon = ITEM_ICONS[weaponName] and (ITEM_ICONS[weaponName][skinTarget] or ITEM_ICONS[weaponName][skinTarget:lower()])
-                            if skinIcon then
-                                local iconLabel = slot:FindFirstChild("Icon")
-                                if iconLabel and iconLabel.ClassName == "ImageLabel" then
-                                    writeImage(iconLabel, skinIcon)
-                                end
-                            end
-                        end
-                    end
-                end
-            end
-        end
-    end
-    
-    -- 2. Equipment Page (0ms when open)
-    local eq = mf:FindFirstChild("Equipment")
-    if eq and eq.Visible then
-        for _, d in ipairs(eq:GetDescendants()) do
-            if d.ClassName == "ImageLabel" or d.ClassName == "ImageButton" then
-                replaceStandardIcon(d)
-            end
-        end
+-- Threaded 0ms loop that safely halts on place unload / leave without crashing
+task.spawn(function()
+    while not mf do
+        pcall(function()
+            local pg = LP:FindFirstChild("PlayerGui")
+            mf = pg and pg.MainGui.MainFrame
+        end)
+        task.wait(0.5)
     end
 
-    -- 3. PickWeapons & PickWeaponsList Menus (0ms when open)
-    local pages = mf:FindFirstChild("Pages")
-    if pages then
-        local pw = pages:FindFirstChild("PickWeapons")
-        if pw and pw.Visible then
-            local list = pw:FindFirstChild("List") and pw.List:FindFirstChild("Container")
-            if list then
-                for _, f in ipairs(list:GetChildren()) do
-                    local btn = f:FindFirstChild("Button")
-                    local pic = btn and btn:FindFirstChild("Icon") and btn.Icon:FindFirstChild("Picture")
-                    if pic and pic.ClassName == "ImageLabel" then
-                        replaceStandardIcon(pic)
-                    end
-                end
-            end
-            local chosen = pw:FindFirstChild("ChosenWeapons")
-            if chosen then
-                for _, f in ipairs(chosen:GetChildren()) do
-                    local btn = f:FindFirstChild("Button")
-                    local pic = btn and btn:FindFirstChild("Picture")
-                    if pic and pic.ClassName == "ImageLabel" then
-                        replaceStandardIcon(pic)
-                    end
-                end
-            end
-        end
+    while true do
+        task.wait(0)
         
-        local pw2 = pages:FindFirstChild("PickWeaponsList")
-        if pw2 and pw2.Visible then
-            local lc = pw2:FindFirstChild("ListContainer") and pw2.ListContainer:FindFirstChild("List") and pw2.ListContainer.List:FindFirstChild("Container")
-            if lc then
-                for _, s in ipairs(lc:GetChildren()) do
-                    local btn = s:FindFirstChild("Button")
-                    local pic = btn and btn:FindFirstChild("Icon") and btn.Icon:FindFirstChild("Picture")
-                    if pic and pic.ClassName == "ImageLabel" then
-                        replaceStandardIcon(pic)
-                    end
+        -- 1. Hotbar Slots & EquippedDisplay
+        pcall(function()
+            local fi = mf:FindFirstChild("FighterInterfaces")
+            local lni = fi and fi:FindFirstChild(ln)
+            local sub = lni and (lni:FindFirstChild("BottomRight") or lni:FindFirstChild("BottomCenter") or lni:FindFirstChild("BottomLeft"))
+            local c = sub and sub:FindFirstChild("Container")
+            local hb = c and c:FindFirstChild("Hotbar") and c.Hotbar:FindFirstChild("Container")
+            if not hb then
+                local directHb = lni and lni:FindFirstChild("Hotbar") and lni.Hotbar:FindFirstChild("Container")
+                hb = directHb
+            end
+            
+            if hb and hb ~= hbr then
+                hbr = hb
+                hbc = {}
+                hbd = {}
+                for i = 1, ni do
+                    local s = ff(hb, ic[i].w)
+                    if s then hbc[i] = ff(s, "Icon") end
                 end
             end
-            local ch = pw2:FindFirstChild("ChosenWeapons")
-            if ch then
-                for _, s in ipairs(ch:GetChildren()) do
-                    local btn = s:FindFirstChild("Button")
-                    local pic = btn and btn:FindFirstChild("Picture")
-                    if pic and pic.ClassName == "ImageLabel" then
-                        replaceStandardIcon(pic)
+            
+            if hb then
+                for i = 1, ni do
+                    if not hbd[i] then
+                        local k = hbc[i]
+                        if k and k.Address then
+                            local a = k.Address
+                            local p = mrd("uintptr_t", a + 0xA18)
+                            if p and p ~= 0 then
+                                local cur = mrd("string", p)
+                                if cur == ic[i].id then
+                                    hbd[i] = true
+                                elseif cur then
+                                    local cp = mrd("int", a + 0xA30)
+                                    if cp and ic[i].l <= cp then
+                                        wr2(a, p, ic[i].b, ic[i].l)
+                                        hbd[i] = true
+                                    end
+                                end
+                            end
+                        end
                     end
                 end
+                
+                -- Also update EquippedDisplay
+                local eqDisp = ff(hb, "EquippedDisplay")
+                if eqDisp then
+                    local w2 = eqDisp:FindFirstChild("Container") and eqDisp.Container:FindFirstChild("Weapon")
+                    local iconLabel = w2 and w2:FindFirstChild("Icon")
+                    if iconLabel then swi(iconLabel) end
+                end
             end
-        end
-    end
-    
-    -- 4. Sniper Custom Reticles / Scopes
-    local sniperSkin = ACTIVE_CONFIG_SKINS["Sniper"]
-    local scopeConf = sniperSkin and SCOPE_RETICLES[sniperSkin]
-    if scopeConf then
-        local ii = mf:FindFirstChild("ItemInterfaces")
-        local si = ii and ii:FindFirstChild(LP.Name .. " - Sniper")
-        local sc2 = si and si:FindFirstChild("Mouse") and si.Mouse:FindFirstChild("Scope")
-        if sc2 then
-            local bi = sc2:FindFirstChild("Blur") and sc2.Blur:FindFirstChild("ImageLabel")
-            local ci = sc2:FindFirstChild("Circle") and sc2.Circle:FindFirstChild("ImageLabel")
-            if bi then writeImage(bi, scopeConf.blur) end
-            if ci then writeImage(ci, scopeConf.circle) end
-        end
-    end
-end
+        end)
 
--- Connect RenderStepped for frame-accurate zero delay
-pcall(function()
-    renderSteppedConn = runService.RenderStepped:Connect(fastSyncGui)
-end)
-
--- Connect DescendantAdded for instant 0ms trigger on UI element creation
-pcall(function()
-    local pg = LP:FindFirstChild("PlayerGui")
-    if pg then
-        pgDescConn = pg.DescendantAdded:Connect(function(d)
-            if d.ClassName == "ImageLabel" or d.ClassName == "ImageButton" then
-                replaceStandardIcon(d)
-                if d.Name == "Icon" and d.Parent and d.Parent.ClassName == "Frame" then
-                    local wName = d.Parent.Name
-                    local skinTarget = ACTIVE_CONFIG_SKINS[wName]
-                    if skinTarget then
-                        local skinIcon = ITEM_ICONS[wName] and (ITEM_ICONS[wName][skinTarget] or ITEM_ICONS[wName][skinTarget:lower()])
-                        if skinIcon then
-                            writeImage(d, skinIcon)
+        -- 2. PickWeapons Page
+        pcall(function()
+            local pw = mf.Pages:FindFirstChild("PickWeapons")
+            if pw and pw.Visible then
+                local list = pw:FindFirstChild("List") and pw.List:FindFirstChild("Container")
+                if list then
+                    for _, f in ipairs(list:GetChildren()) do
+                        if f.ClassName == "Frame" and ff(f, "Button") and f.Button:FindFirstChild("Icon") then
+                            pcall(function() swi(f.Button.Icon.Picture) end)
+                        end
+                    end
+                end
+                local chosen = pw:FindFirstChild("ChosenWeapons")
+                if chosen then
+                    for _, f in ipairs(chosen:GetChildren()) do
+                        if f.ClassName == "Frame" and ff(f, "Button") then
+                            pcall(function() swi(f.Button.Picture) end)
                         end
                     end
                 end
             end
         end)
-    end
-end)
 
--- Unified cleanup: perfectly restores all original memory pointers before place teardown
-local _cleaned = false
-local function fullCleanup()
-    if _cleaned then return end
-    _cleaned = true
-    _scriptAlive = false
-    
-    if renderSteppedConn then
-        pcall(function() renderSteppedConn:Disconnect() end)
-        renderSteppedConn = nil
-    end
-
-    if pgDescConn then
-        pcall(function() pgDescConn:Disconnect() end)
-        pgDescConn = nil
-    end
-
-    for _, c in ipairs(soundConnections) do
-        pcall(function() c:Disconnect() end)
-    end
-    soundConnections = {}
-
-    if uisConn then
-        pcall(function() uisConn:Disconnect() end)
-        uisConn = nil
-    end
-    
-    -- Restore SoundCallbacks bytecode pointers
-    for _, r in ipairs(soundCallbackRestores) do
+        -- 3. PickWeaponsList Page
         pcall(function()
-            if r.defAddr and r.origDefVal then mwr("uintptr_t", r.defAddr, r.origDefVal) end
-            if r.skinAddr and r.origSkinVal then mwr("uintptr_t", r.skinAddr, r.origSkinVal) end
+            local pw2 = mf.Pages:FindFirstChild("PickWeaponsList")
+            if pw2 and pw2.Visible then
+                local lc = pw2:FindFirstChild("ListContainer") and pw2.ListContainer:FindFirstChild("List") and pw2.ListContainer.List:FindFirstChild("Container")
+                if lc then
+                    for _, s in ipairs(lc:GetChildren()) do
+                        if s.Name == "PickWeaponListSlot" and ff(s, "Button") and s.Button:FindFirstChild("Icon") then
+                            pcall(function() swi(s.Button.Icon.Picture) end)
+                        end
+                    end
+                end
+                local ch = pw2:FindFirstChild("ChosenWeapons")
+                if ch then
+                    for _, s in ipairs(ch:GetChildren()) do
+                        if s.Name == "PickWeaponListChosenSlot" and ff(s, "Button") then
+                            pcall(function() swi(s.Button.Picture) end)
+                        end
+                    end
+                end
+            end
         end)
-    end
-    soundCallbackRestores = {}
-    
-    if heartbeatConn then
-        pcall(function() heartbeatConn:Disconnect() end)
-        heartbeatConn = nil
-    end
 
-    -- Restore Viewmodel, Throwables, Projectiles, and Misc memory vectors with 16-byte shared_ptr control blocks
-    for _, r in ipairs(memoryRestores) do
+        -- 4. Equipment Page
         pcall(function()
-            if r.defSlot and r.origDefInst then
-                wr(r.defSlot, r.origDefInst)
-                if r.origDefCtrl then wr(r.defSlot + 8, r.origDefCtrl) end
-            end
-            if r.skinSlot and r.origSkinInst then
-                wr(r.skinSlot, r.origSkinInst)
-                if r.origSkinCtrl then wr(r.skinSlot + 8, r.origSkinCtrl) end
-            end
-            if r.defAddr and r.origDefNC then
-                wr(r.defAddr + OFF.NameContainer, r.origDefNC)
-            end
-            if r.skinAddr and r.origSkinNC then
-                wr(r.skinAddr + OFF.NameContainer, r.origSkinNC)
-            end
-            if r.defAddr and r.origDefParent then
-                wr(r.defAddr + OFF.Parent, r.origDefParent)
-            end
-            if r.skinAddr and r.origSkinParent then
-                wr(r.skinAddr + OFF.Parent, r.origSkinParent)
+            local eq = mf:FindFirstChild("Equipment")
+            if eq and eq.Visible then
+                for _, d in ipairs(eq:GetDescendants()) do
+                    if d.ClassName == "ImageLabel" or d.ClassName == "ImageButton" then
+                        pcall(swi, d)
+                    end
+                end
             end
         end)
+
+        -- 5. Custom Sniper Scope
+        if spd then
+            pcall(function()
+                local ii = mf:FindFirstChild("ItemInterfaces")
+                local si = ii and ii:FindFirstChild(ln .. " - Sniper")
+                if not si then return end
+                local sc2 = si.Mouse.Scope
+                local bi, ci = sc2.Blur.ImageLabel, sc2.Circle.ImageLabel
+                local ba, ca = bi.Address, ci.Address
+                local bp = mrd("uintptr_t", ba + 0xA18)
+                if bp and bp ~= 0 then
+                    local cur = mrd("string", bp)
+                    if cur ~= spd.bi then
+                        local bc = mrd("int", ba + 0xA30)
+                        if bc and spd.bl <= bc then wr2(ba, bp, spd.bb, spd.bl) end
+                    end
+                end
+                local cp2 = mrd("uintptr_t", ca + 0xA18)
+                if cp2 and cp2 ~= 0 then
+                    local cur = mrd("string", cp2)
+                    if cur ~= spd.ci then
+                        local cc = mrd("int", ca + 0xA30)
+                        if cc and spd.cl <= cc then wr2(ca, cp2, spd.cb, spd.cl) end
+                    end
+                end
+            end)
+        end
     end
-    memoryRestores = {}
-    _G.__RIVALS_SKIN_CHANGER_ACTIVE = false
-end
-
-_G.__RIVALS_SKIN_CHANGER_ACTIVE = true
-_G.__RIVALS_SKIN_CHANGER_RESTORE = fullCleanup
-
--- Automated crash prevention hooks: Trigger fullCleanup immediately on teleport, match queue, or game exit
-pcall(function()
-    LP.OnTeleport:Connect(function()
-        fullCleanup()
-    end)
-end)
-
-pcall(function()
-    local ts = game:GetService("TeleportService")
-    ts.TeleportInit:Connect(fullCleanup)
-    ts.TeleportInitFailed:Connect(fullCleanup)
-end)
-
-pcall(function()
-    game:BindToClose(fullCleanup)
-end)
-
-pcall(function()
-    game:GetService("Players").PlayerRemoving:Connect(function(player)
-        if player == LP then
-            fullCleanup()
-        end
-    end)
-end)
-
-pcall(function()
-    LP.AncestryChanged:Connect(function(_, parent)
-        if not parent or not LP:IsDescendantOf(game) then
-            fullCleanup()
-        end
-    end)
-end)
-
-pcall(function()
-    if wf then
-        wf.AncestryChanged:Connect(function(_, parent)
-            if not parent or not wf:IsDescendantOf(game) then
-                fullCleanup()
-            end
-        end)
-    end
-end)
-
-pcall(function()
-    local gs = game:GetService("GuiService")
-    gs.ErrorMessageChanged:Connect(function()
-        fullCleanup()
-    end)
-end)
-
--- Heartbeat watchdog monitor: ensures instant cleanup on disconnection or place transition
-pcall(function()
-    heartbeatConn = runService.Heartbeat:Connect(function()
-        if not _scriptAlive then
-            if heartbeatConn then heartbeatConn:Disconnect() end
-            return
-        end
-        if not LP or not LP.Parent or not wf or not wf.Parent or not game:IsLoaded() or not LP:IsDescendantOf(game) then
-            fullCleanup()
-        end
-    end)
 end)
