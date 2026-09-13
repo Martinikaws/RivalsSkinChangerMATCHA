@@ -20,10 +20,12 @@ end
 
 if game.GameId ~= 6035872082 then return end
 
--- Idempotency: restore memory pointers if previously active
-if _G.__RIVALS_SKIN_CHANGER_ACTIVE and type(_G.__RIVALS_SKIN_CHANGER_RESTORE) == "function" then
+-- Older builds parked a restore closure in _G; run it once, then drop it.
+if type(_G.__RIVALS_SKIN_CHANGER_RESTORE) == "function" then
     pcall(_G.__RIVALS_SKIN_CHANGER_RESTORE)
 end
+_G.__RIVALS_SKIN_CHANGER_RESTORE = nil
+_G.__RIVALS_SKIN_CHANGER_ACTIVE = nil
 
 local A = LP:WaitForChild("PlayerScripts", 5):WaitForChild("Assets", 5)
 local vm = A and A:WaitForChild("ViewModels", 5)
@@ -34,6 +36,27 @@ local pf = A and A:FindFirstChild("Projectiles")
 
 if not wf then
     return
+end
+
+-- wf existing doesn't mean assets have finished streaming in - the swap pass
+-- below does raw reads of Roblox's internal children-vector begin/end
+-- pointers, which is only safe once nothing is actively appending to that
+-- vector. Reading those bounds mid-mutation can return a stale/inconsistent
+-- pair, making the slot scan wander outside the real vector and write
+-- somewhere it shouldn't - plausible explanation for corruption landing on
+-- an unconfigured weapon (Handgun) as collateral damage from another
+-- weapon's swap while things were still loading. Wait for both wf's and
+-- vm's descendant counts to hold steady across a check before touching
+-- memory at all, instead of racing a still-mutating structure.
+do
+    local lastWf, lastVm = -1, -1
+    for _ = 1, 20 do
+        local wfCount = #wf:GetChildren()
+        local vmCount = #vm:GetDescendants()
+        if wfCount == lastWf and vmCount == lastVm then break end
+        lastWf, lastVm = wfCount, vmCount
+        task.wait(0.3)
+    end
 end
 
 local mrd, mwr, pcall, ipairs, pairs = memory_read, memory_write, pcall, ipairs, pairs
@@ -53,6 +76,30 @@ local OFF = {
     Children = 120,
     Transparency = 304
 }
+
+-- Undo the previous run's swaps in this place before swapping again, from
+-- plain data that run left in _G.
+do
+    local prev = _G.__RIVALS_SKIN_CHANGER_STATE
+    _G.__RIVALS_SKIN_CHANGER_STATE = nil
+    -- Same place only: after a teleport these addresses point into a destroyed DataModel.
+    if type(prev) == "table" and type(prev.restores) == "table" and prev.wfAddr == wf.Address then
+        for _, r in ipairs(prev.restores) do
+            if r.defSlot and r.origDefInst then
+                wr(r.defSlot, r.origDefInst)
+                if r.origDefCtrl then wr(r.defSlot + 8, r.origDefCtrl) end
+            end
+            if r.skinSlot and r.origSkinInst then
+                wr(r.skinSlot, r.origSkinInst)
+                if r.origSkinCtrl then wr(r.skinSlot + 8, r.origSkinCtrl) end
+            end
+            if r.defAddr and r.origDefNC then wr(r.defAddr + OFF.NameContainer, r.origDefNC) end
+            if r.skinAddr and r.origSkinNC then wr(r.skinAddr + OFF.NameContainer, r.origSkinNC) end
+            if r.defAddr and r.origDefParent then wr(r.defAddr + OFF.Parent, r.origDefParent) end
+            if r.skinAddr and r.origSkinParent then wr(r.skinAddr + OFF.Parent, r.origSkinParent) end
+        end
+    end
+end
 
 local IMG_OFF = 0xA10 -- Verified default for modern 64-bit engine build
 
@@ -954,10 +1001,21 @@ local function findSkinModel(skinName)
 end
 
 local memoryRestores = {}
-local soundCallbackRestores = {}
 
 -- Safe atomic two-way pointer swap
+-- Every structural tree swap that applies skins (weapons, throwables,
+-- projectiles, sound callbacks). Cleared as a crash cause: 3/3 clean
+-- same-process teleports with these on.
+local ENABLE_MODEL_SWAPS = true
+-- One-time load edits through the normal Lua API. With them on, a
+-- same-process teleport (lobby -> match) crashed Roblox every time
+-- (RobloxPlayerBeta +0x7d8bf9); with both off it didn't, 3 out of 3. Which
+-- of the two is responsible hasn't been isolated, so both stay off.
+local ENABLE_RIG_FIXES = false
+local ENABLE_SOUND_REPLACEMENT = false
+
 local function swapTwoWay(instA, instB, parentFolder)
+    if not ENABLE_MODEL_SWAPS then return false end
     if not instA or not instB or not instA.Address or not instB.Address then return false end
     local a, b = instA.Address, instB.Address
     if a == b then return false end
@@ -1269,7 +1327,12 @@ local _scriptAlive = true
 local ACTIVE_CONFIG_SKINS = {}
 
 -- Native SoundCallbacks Redirection Engine
+-- Skin-specific sound callback redirection. Off: untested since it moved from
+-- the Instance.This swap to swapTwoWay.
+local ENABLE_SOUND_CALLBACKS = false
+
 local function applySoundCallbacks()
+    if not ENABLE_SOUND_CALLBACKS then return end
     local rs = game:GetService("ReplicatedStorage")
     local sc = rs:FindFirstChild("Modules") and rs.Modules:FindFirstChild("AnimationLibrary") and rs.Modules.AnimationLibrary:FindFirstChild("SoundCallbacks")
     if not sc then return end
@@ -1291,52 +1354,74 @@ local function applySoundCallbacks()
             if name:sub(1, #spfx) == spfx then
                 local suffix = name:sub(#spfx + 1)
                 local defInst = abn[wp .. "_" .. suffix]
+                -- Redirect via swapTwoWay (slot + name + parent, pointer and
+                -- refcount control block moved together). This used to swap the
+                -- pointer at Address+0x8 - Instance.This, each instance's
+                -- self-reference - which leaves each instance believing it's the
+                -- other one.
                 if defInst and inst and defInst.Address and inst.Address and defInst.Address ~= inst.Address then
-                    local a = mrd("uintptr_t", defInst.Address + 0x8)
-                    local b = mrd("uintptr_t", inst.Address + 0x8)
-                    if a and b and a ~= b then
-                        table.insert(soundCallbackRestores, {
-                            defAddr = defInst.Address + 0x8,
-                            origDefVal = a,
-                            skinAddr = inst.Address + 0x8,
-                            origSkinVal = b
-                        })
-                        mwr("uintptr_t", defInst.Address + 0x8, b)
-                        mwr("uintptr_t", inst.Address + 0x8, a)
-                    end
+                    swapTwoWay(defInst, inst, sc)
                 end
             end
         end
     end
 end
 
+-- Everything that keeps running after load - the RenderStepped ticker (FX
+-- culler + sound loop), the icon engine and the custom-animation input
+-- hook - is off. Parked task.wait threads alive at a same-process teleport
+-- crash Roblox (reproduced with two empty loops); connections were never
+-- isolated, so these stay off too.
+local ENABLE_PERSISTENT_FEATURES = false
+
+-- Periodic work runs off one RenderStepped connection, never task.spawn loops:
+-- a Matcha-owned thread parked in task.wait when Roblox switches places
+-- in-process crashes the engine (RobloxPlayerBeta +0x7d8bf9, reproduced with
+-- only two empty task.wait loops), and Matcha supports no teardown signal
+-- (BindToClose/OnTeleport/TeleportInit/PlayerRemoving/AncestryChanged) that
+-- could stop them in time.
+local tickJobs = {}
+local function every(interval, fn)
+    table.insert(tickJobs, {interval = interval, acc = 0, fn = fn})
+end
+local tickConn = nil
+if ENABLE_PERSISTENT_FEATURES then
+    tickConn = game:GetService("RunService").RenderStepped:Connect(function(dt)
+        if not _scriptAlive then return end
+        for _, j in ipairs(tickJobs) do
+            j.acc = j.acc + (dt or 1 / 60)
+            if j.acc >= j.interval then
+                j.acc = 0
+                pcall(j.fn)
+            end
+        end
+    end)
+end
+
 -- Active viewmodel beam and particle FX culler
-task.spawn(function()
+do
     local rs = game:GetService("ReplicatedStorage")
-    while _scriptAlive do
-        task.wait(0.3)
-        pcall(function()
-            local tempVM = rs:FindFirstChild("Assets") and rs.Assets:FindFirstChild("Temp") and rs.Assets.Temp:FindFirstChild("ViewModels")
-            if tempVM then
-                for _, activeVM in ipairs(tempVM:GetChildren()) do
-                    if activeVM.Name:find(LP.Name) then
-                        local hrp = activeVM:FindFirstChild("HumanoidRootPart")
-                        local isUnequipped = not hrp or hrp.Position.Magnitude < 1
-                        for _, desc in ipairs(activeVM:GetDescendants()) do
-                            if desc.ClassName == "Beam" or desc.ClassName == "ParticleEmitter" or desc.ClassName == "Trail" then
-                                if isUnequipped and desc.Enabled then
-                                    desc.Enabled = false
-                                elseif not isUnequipped and not desc.Enabled then
-                                    desc.Enabled = true
-                                end
+    every(0.3, function()
+        local tempVM = rs:FindFirstChild("Assets") and rs.Assets:FindFirstChild("Temp") and rs.Assets.Temp:FindFirstChild("ViewModels")
+        if tempVM then
+            for _, activeVM in ipairs(tempVM:GetChildren()) do
+                if activeVM.Name:find(LP.Name) then
+                    local hrp = activeVM:FindFirstChild("HumanoidRootPart")
+                    local isUnequipped = not hrp or hrp.Position.Magnitude < 1
+                    for _, desc in ipairs(activeVM:GetDescendants()) do
+                        if desc.ClassName == "Beam" or desc.ClassName == "ParticleEmitter" or desc.ClassName == "Trail" then
+                            if isUnequipped and desc.Enabled then
+                                desc.Enabled = false
+                            elseif not isUnequipped and not desc.Enabled then
+                                desc.Enabled = true
                             end
                         end
                     end
                 end
             end
-        end)
-    end
-end)
+        end
+    end)
+end
 
 -- Ultra-Precise Wing Coordinate Matrices (extracted directly from official assets)
 local KATANA_WINGS1_CFS = {
@@ -1503,11 +1588,13 @@ end
 
 local soundConnections = {}
 pcall(function()
+    if not ENABLE_SOUND_REPLACEMENT then return end
     local ss = game:GetService("SoundService")
     if ss then
         for _, s in ipairs(ss:GetDescendants()) do
             if s.ClassName == "Sound" then hookSound(s) end
         end
+        if not ENABLE_PERSISTENT_FEATURES then return end
         table.insert(soundConnections, ss.DescendantAdded:Connect(function(s)
             if s.ClassName == "Sound" then hookSound(s) end
         end))
@@ -1517,19 +1604,14 @@ pcall(function()
     end))
 end)
 
-task.spawn(function()
-    while _scriptAlive do
-        task.wait(0.1)
-        pcall(function()
-            local fp = workspace:FindFirstChild("ViewModels") and workspace.ViewModels:FindFirstChild("FirstPerson")
-            if fp then
-                for _, vmInst in ipairs(fp:GetChildren()) do
-                    for _, s in ipairs(vmInst:GetDescendants()) do
-                        if s.ClassName == "Sound" then hookSound(s) end
-                    end
-                end
+every(0.1, function()
+    local fp = workspace:FindFirstChild("ViewModels") and workspace.ViewModels:FindFirstChild("FirstPerson")
+    if fp then
+        for _, vmInst in ipairs(fp:GetChildren()) do
+            for _, s in ipairs(vmInst:GetDescendants()) do
+                if s.ClassName == "Sound" then hookSound(s) end
             end
-        end)
+        end
     end
 end)
 
@@ -1562,6 +1644,7 @@ end
 
 local uisConn = nil
 pcall(function()
+    if not ENABLE_PERSISTENT_FEATURES then return end
     local uis = game:GetService("UserInputService")
     uisConn = uis.InputBegan:Connect(function(input, gpe)
         if gpe then return end
@@ -1712,30 +1795,57 @@ local function applySkinSwapper()
                 ACTIVE_CONFIG_SKINS[weaponName] = skinTarget
                 
                 -- 1. Viewmodel 3D Model Memory Swapping
+                -- wf existing doesn't mean every weapon slot inside it has
+                -- streamed in yet - confirmed live: manually re-running the
+                -- exact same swap on Chainsaw/Handsaws right after a run that
+                -- reported it missing worked immediately, so the object just
+                -- wasn't there yet at the moment this specific line ran.
+                -- Retry the base-weapon lookup too, not just the skin lookup.
                 local defModel = wf:FindFirstChild(weaponName)
+                if not defModel then
+                    for _ = 1, 6 do
+                        task.wait(0.5)
+                        defModel = wf:FindFirstChild(weaponName)
+                        if defModel then break end
+                    end
+                end
                 if not defModel then
                     table.insert(missingBaseWeapons, weaponName)
                 else
+                    -- A skin-case folder can exist while its own children -
+                    -- especially heavier multi-part skins - are still
+                    -- streaming in. findSkinModel() only checks live state
+                    -- once; if that one check lands mid-stream it comes back
+                    -- nil and this weapon's skin is silently skipped for the
+                    -- rest of the run, even though the asset shows up a
+                    -- moment later. Retry a few times before giving up.
                     local skinModel = findSkinModel(skinTarget)
+                    if not skinModel then
+                        for _ = 1, 6 do
+                            task.wait(0.5)
+                            skinModel = findSkinModel(skinTarget)
+                            if skinModel then break end
+                        end
+                    end
                     if not skinModel then
                         table.insert(missingSkinModels, skinTarget)
                     else
                         if defModel.Address and skinModel.Address and defModel.Address ~= skinModel.Address then
-                            rigSkinModel(skinModel)
+                            if ENABLE_RIG_FIXES then rigSkinModel(skinModel) end
                             
                             local weaponLower = weaponName:lower()
                             if weaponLower:find("crossbow") or skinLower:find("crossbow") then
-                                pcall(fixCrossbowRig, skinModel)
+                                if ENABLE_RIG_FIXES then pcall(fixCrossbowRig, skinModel) end
                             elseif weaponLower:find("bow") or skinLower:find("bow") then
-                                pcall(fixBowRig, skinModel)
+                                if ENABLE_RIG_FIXES then pcall(fixBowRig, skinModel) end
                             elseif weaponLower:find("rpg") or skinLower:find("rpkey") or skinLower:find("rocket") then
-                                pcall(fixRPGRig, skinModel)
+                                if ENABLE_RIG_FIXES then pcall(fixRPGRig, skinModel) end
                             elseif weaponLower == "grenade" or skinLower:find("nade") or skinLower:find("bomb") then
-                                pcall(fixGrenadeRig, skinModel)
+                                if ENABLE_RIG_FIXES then pcall(fixGrenadeRig, skinModel) end
                             elseif weaponLower == "gunblade" or skinLower:find("gunblade") or skinLower:find("blade") then
-                                pcall(fixGunbladeRig, skinModel)
+                                if ENABLE_RIG_FIXES then pcall(fixGunbladeRig, skinModel) end
                             elseif weaponLower == "katana" or skinLower:find("katana") then
-                                pcall(fixKatanaRig, skinModel)
+                                if ENABLE_RIG_FIXES then pcall(fixKatanaRig, skinModel) end
                             end
                             
                             if swapTwoWay(defModel, skinModel, wf) then
@@ -1982,6 +2092,7 @@ end
 
 -- Connect RenderStepped for frame-accurate zero delay
 pcall(function()
+    if not ENABLE_PERSISTENT_FEATURES then return end
     renderSteppedConn = runService.RenderStepped:Connect(fastSyncGui)
 end)
 
@@ -1989,6 +2100,7 @@ end)
 pcall(function()
     local pg = LP:FindFirstChild("PlayerGui")
     if pg then
+        if not ENABLE_PERSISTENT_FEATURES then return end
         pgDescConn = pg.DescendantAdded:Connect(function(d)
             if d.ClassName == "ImageLabel" or d.ClassName == "ImageButton" then
                 replaceStandardIcon(d)
@@ -2007,138 +2119,7 @@ pcall(function()
     end
 end)
 
--- Unified cleanup: perfectly restores all original memory pointers before place teardown
-local _cleaned = false
-local function fullCleanup()
-    if _cleaned then return end
-    _cleaned = true
-    _scriptAlive = false
-    
-    if renderSteppedConn then
-        pcall(function() renderSteppedConn:Disconnect() end)
-        renderSteppedConn = nil
-    end
+_G.__RIVALS_SKIN_CHANGER_STATE = {restores = memoryRestores, wfAddr = wf.Address}
 
-    if pgDescConn then
-        pcall(function() pgDescConn:Disconnect() end)
-        pgDescConn = nil
-    end
-
-    for _, c in ipairs(soundConnections) do
-        pcall(function() c:Disconnect() end)
-    end
-    soundConnections = {}
-
-    if uisConn then
-        pcall(function() uisConn:Disconnect() end)
-        uisConn = nil
-    end
-    
-    -- Restore SoundCallbacks bytecode pointers
-    for _, r in ipairs(soundCallbackRestores) do
-        pcall(function()
-            if r.defAddr and r.origDefVal then mwr("uintptr_t", r.defAddr, r.origDefVal) end
-            if r.skinAddr and r.origSkinVal then mwr("uintptr_t", r.skinAddr, r.origSkinVal) end
-        end)
-    end
-    soundCallbackRestores = {}
-    
-    if heartbeatConn then
-        pcall(function() heartbeatConn:Disconnect() end)
-        heartbeatConn = nil
-    end
-
-    -- Restore Viewmodel, Throwables, Projectiles, and Misc memory vectors with 16-byte shared_ptr control blocks
-    for _, r in ipairs(memoryRestores) do
-        pcall(function()
-            if r.defSlot and r.origDefInst then
-                wr(r.defSlot, r.origDefInst)
-                if r.origDefCtrl then wr(r.defSlot + 8, r.origDefCtrl) end
-            end
-            if r.skinSlot and r.origSkinInst then
-                wr(r.skinSlot, r.origSkinInst)
-                if r.origSkinCtrl then wr(r.skinSlot + 8, r.origSkinCtrl) end
-            end
-            if r.defAddr and r.origDefNC then
-                wr(r.defAddr + OFF.NameContainer, r.origDefNC)
-            end
-            if r.skinAddr and r.origSkinNC then
-                wr(r.skinAddr + OFF.NameContainer, r.origSkinNC)
-            end
-            if r.defAddr and r.origDefParent then
-                wr(r.defAddr + OFF.Parent, r.origDefParent)
-            end
-            if r.skinAddr and r.origSkinParent then
-                wr(r.skinAddr + OFF.Parent, r.origSkinParent)
-            end
-        end)
-    end
-    memoryRestores = {}
-    _G.__RIVALS_SKIN_CHANGER_ACTIVE = false
-end
-
-_G.__RIVALS_SKIN_CHANGER_ACTIVE = true
-_G.__RIVALS_SKIN_CHANGER_RESTORE = fullCleanup
-
--- Automated crash prevention hooks: Trigger fullCleanup immediately on teleport, match queue, or game exit
-pcall(function()
-    LP.OnTeleport:Connect(function()
-        fullCleanup()
-    end)
-end)
-
-pcall(function()
-    local ts = game:GetService("TeleportService")
-    ts.TeleportInit:Connect(fullCleanup)
-    ts.TeleportInitFailed:Connect(fullCleanup)
-end)
-
-pcall(function()
-    game:BindToClose(fullCleanup)
-end)
-
-pcall(function()
-    game:GetService("Players").PlayerRemoving:Connect(function(player)
-        if player == LP then
-            fullCleanup()
-        end
-    end)
-end)
-
-pcall(function()
-    LP.AncestryChanged:Connect(function(_, parent)
-        if not parent or not LP:IsDescendantOf(game) then
-            fullCleanup()
-        end
-    end)
-end)
-
-pcall(function()
-    if wf then
-        wf.AncestryChanged:Connect(function(_, parent)
-            if not parent or not wf:IsDescendantOf(game) then
-                fullCleanup()
-            end
-        end)
-    end
-end)
-
-pcall(function()
-    local gs = game:GetService("GuiService")
-    gs.ErrorMessageChanged:Connect(function()
-        fullCleanup()
-    end)
-end)
-
--- Heartbeat watchdog monitor: ensures instant cleanup on disconnection or place transition
-pcall(function()
-    heartbeatConn = runService.Heartbeat:Connect(function()
-        if not _scriptAlive then
-            if heartbeatConn then heartbeatConn:Disconnect() end
-            return
-        end
-        if not LP or not LP.Parent or not wf or not wf.Parent or not game:IsLoaded() or not LP:IsDescendantOf(game) then
-            fullCleanup()
-        end
-    end)
-end)
+-- No teardown hooks: Matcha doesn't support BindToClose, OnTeleport,
+-- TeleportInit, PlayerRemoving or AncestryChanged (they read as nil).
