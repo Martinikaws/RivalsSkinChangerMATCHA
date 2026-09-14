@@ -98,6 +98,13 @@ do
             if r.defAddr and r.origDefParent then wr(r.defAddr + OFF.Parent, r.origDefParent) end
             if r.skinAddr and r.origSkinParent then wr(r.skinAddr + OFF.Parent, r.origSkinParent) end
         end
+        local mo = LP.PlayerScripts:FindFirstChild("Modules")
+        local vms = mo and mo:FindFirstChild("ViewModels")
+        for _, rn in ipairs(prev.renames or {}) do
+            local fam = vms and vms:FindFirstChild(rn[1])
+            local m = fam and fam:FindFirstChild(rn[1])
+            if m then pcall(function() m.Name = rn[2] end) end
+        end
     end
 end
 
@@ -1001,6 +1008,7 @@ local function findSkinModel(skinName)
 end
 
 local memoryRestores = {}
+local renamedScripts = {}
 
 -- Safe atomic two-way pointer swap
 -- Every structural tree swap that applies skins (weapons, throwables,
@@ -1013,6 +1021,10 @@ local ENABLE_MODEL_SWAPS = true
 -- of the two is responsible hasn't been isolated, so both stay off.
 local ENABLE_RIG_FIXES = false
 local ENABLE_SOUND_REPLACEMENT = false
+-- Renaming a skin script via the Lua API (m.Name = ...) crashed the next
+-- teleport like the rig fixes and sound pass did: any property write through
+-- the Lua API from Matcha does. Raw memory swaps do not.
+local ENABLE_SCRIPT_RENAMES = false
 
 local function swapTwoWay(instA, instB, parentFolder)
     if not ENABLE_MODEL_SWAPS then return false end
@@ -1741,7 +1753,7 @@ local function applySkinSwapper()
                 for _, f in ipairs(files) do
                     local clean = f:lower():gsub(string.char(92), "/")
                     if clean:find("rivals_config") then
-                        table.insert(candidatePaths, 1, f)
+                        table.insert(candidatePaths, f)
                     end
                 end
             end
@@ -1761,6 +1773,7 @@ local function applySkinSwapper()
         return 0, "rivals_config.lua was not found in your executor's workspace folder! Make sure rivals_config.lua is placed in your workspace directory."
     end
     
+    print("[RivalsSkinChanger] Config: " .. tostring(targetFile))
     local okRead, r2 = pcall(readfile, targetFile)
     if not okRead or not r2 then
         return 0, "Failed to read file '" .. tostring(targetFile) .. "'. File may be locked by another application."
@@ -1784,6 +1797,9 @@ local function applySkinSwapper()
     local missingBaseWeapons = {}
     local missingSkinModels = {}
     local swappedCount = 0
+    local skippedNoScript = {}
+    local vmMods = LP.PlayerScripts:FindFirstChild("Modules")
+    vmMods = vmMods and vmMods:FindFirstChild("ViewModels")
 
     for _, rawLine in ipairs(r2:split(string.char(10))) do 
         local weaponName, skinTarget = parseConfigLine(rawLine)
@@ -1848,8 +1864,27 @@ local function applySkinSwapper()
                                 if ENABLE_RIG_FIXES then pcall(fixKatanaRig, skinModel) end
                             end
                             
-                            if swapTwoWay(defModel, skinModel, wf) then
+                            -- "Base" weapons (BaseSatchel, BaseDaggers, ...) have a viewmodel
+                            -- script per skin, default included, picked by the equipped skin's
+                            -- name. Swap it with the model or the default script drives the skin
+                            -- model, indexes parts it lacks, and the gun never builds.
+                            local baseMod = vmMods and vmMods:FindFirstChild("Base" .. (weaponName:gsub(" ", "")))
+                            local defMod = baseMod and baseMod:FindFirstChild(weaponName)
+                            local skinMod = baseMod and baseMod:FindFirstChild(skinTarget)
+                            if defMod and not skinMod then
+                                table.insert(skippedNoScript, weaponName .. "=" .. skinTarget)
+                            elseif swapTwoWay(defModel, skinModel, wf) then
                                 swappedCount = swappedCount + 1
+                                if defMod and skinMod then
+                                    swapTwoWay(defMod, skinMod, baseMod)
+                                elseif ENABLE_SCRIPT_RENAMES and not baseMod then
+                                    local fam = vmMods and vmMods:FindFirstChild(weaponName)
+                                    local sm = fam and fam:FindFirstChild(skinTarget)
+                                    if sm and not fam:FindFirstChild(weaponName)
+                                        and pcall(function() sm.Name = weaponName end) then
+                                        table.insert(renamedScripts, {weaponName, skinTarget})
+                                    end
+                                end
                             end
                         end
                     end
@@ -1921,6 +1956,14 @@ local function applySkinSwapper()
         end
     end
 
+    if #skippedNoScript > 0 then
+        print("[RivalsSkinChanger] Left default (skin has no viewmodel script of its own): " .. table.concat(skippedNoScript, ", "))
+    end
+    if #renamedScripts > 0 then
+        local names = {}
+        for _, rn in ipairs(renamedScripts) do names[#names + 1] = rn[2] end
+        print("[RivalsSkinChanger] Using the skin's own viewmodel script: " .. table.concat(names, ", "))
+    end
     return swappedCount, nil
 end
 
@@ -2119,7 +2162,7 @@ pcall(function()
     end
 end)
 
-_G.__RIVALS_SKIN_CHANGER_STATE = {restores = memoryRestores, wfAddr = wf.Address}
+_G.__RIVALS_SKIN_CHANGER_STATE = {restores = memoryRestores, wfAddr = wf.Address, renames = renamedScripts}
 
 -- No teardown hooks: Matcha doesn't support BindToClose, OnTeleport,
 -- TeleportInit, PlayerRemoving or AncestryChanged (they read as nil).
