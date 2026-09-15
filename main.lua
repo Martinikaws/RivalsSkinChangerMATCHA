@@ -105,6 +105,10 @@ do
             local m = fam and fam:FindFirstChild(rn[1])
             if m then pcall(function() m.Name = rn[2] end) end
         end
+        local sd = prev.skinData or {}
+        for i = #sd, 1, -1 do
+            if sd[i][2] then wr(sd[i][1], sd[i][2]) end
+        end
     end
 end
 
@@ -1025,6 +1029,15 @@ local ENABLE_SOUND_REPLACEMENT = false
 -- teleport like the rig fixes and sound pass did: any property write through
 -- the Lua API from Matcha does. Raw memory swaps do not.
 local ENABLE_SCRIPT_RENAMES = false
+-- ItemLibrary.ViewModels[name] holds each skin's Animations table and
+-- RootPartOffset. The game reads the entry of the equipped item, which stays
+-- the default's, so a swapped-in skin model played the default's animations
+-- (detached key-skin parts) at the default's offset (oversized Arch Molotov).
+-- The default entry's two slots are pointed at the skin's values with raw
+-- pointer writes, the same kind of write as the model swaps.
+local ENABLE_SKIN_DATA_SYNC = true
+local skinDataPairs = {}
+local skinDataRestores = {}
 
 local function swapTwoWay(instA, instB, parentFolder)
     if not ENABLE_MODEL_SWAPS then return false end
@@ -1728,6 +1741,92 @@ local function parseConfigLine(rawLine)
 end
 
 -- Main ultra-fast skin swapper with comprehensive error diagnostics
+-- Entries are found by Image: defaults share animation names (Grenade's are
+-- also Flashbang's, Smoke Grenade's and Warpstone's), so matching on those
+-- would change other weapons too. Images come from the decompiled
+-- ItemLibrary, since require() of game modules fails in Matcha.
+local function syncSkinData(pairList)
+    if type(decompile) ~= "function" or type(getgc) ~= "function" then
+        return 0, "needs decompile and getgc"
+    end
+    local mods = game:GetService("ReplicatedStorage"):FindFirstChild("Modules")
+    local lib = mods and mods:FindFirstChild("ItemLibrary")
+    local okD, src = pcall(decompile, lib)
+    if not okD or type(src) ~= "string" then return 0, "ItemLibrary could not be decompiled" end
+    local rpoAt = src:find('["RootPartOffset"]', 1, true)
+    local ctor
+    for name, pos in src:gmatch("local function ([%w_]+)%(()") do
+        if rpoAt and pos < rpoAt then ctor = name end
+    end
+    if not ctor then return 0, "ViewModels constructor not found" end
+    local images = {}
+    for name, im in src:gmatch(ctor .. '%("([^"]+)", "(rbxassetid://%d+)"') do images[name] = im end
+
+    local wanted = {}
+    for _, p in ipairs(pairList) do
+        if images[p[1]] and images[p[2]] then
+            wanted[images[p[1]]] = true
+            wanted[images[p[2]]] = true
+        end
+    end
+    if next(wanted) == nil then return 0, "no ItemLibrary entries for the swapped skins" end
+
+    local job = game.JobId
+    local okG, rows = pcall(getgc, {"Image", "Animations", "RootPartOffset"})
+    if not okG or type(rows) ~= "table" then return 0, "gc scan failed" end
+    -- A teleport during the scan frees everything it found.
+    if game.JobId ~= job then return 0, "server changed during the scan" end
+
+    local q = string.char(34)
+    local anims, offsets, imageRows = {}, {}, {}
+    for _, r in ipairs(rows) do
+        if r.key == "Animations" then
+            anims[#anims + 1] = r.addr
+        elseif r.key == "RootPartOffset" then
+            offsets[#offsets + 1] = r.addr
+        elseif r.key == "Image" and type(r.value) == "string" then
+            local v = r.value
+            if v:sub(1, 1) == q and v:sub(-1) == q then v = v:sub(2, -2) end
+            if wanted[v] then imageRows[#imageRows + 1] = {v, r.addr} end
+        end
+    end
+    -- Slots of one table share one array of 32-byte nodes.
+    local function sibling(list, addr)
+        local hit, n = nil, 0
+        for _, a in ipairs(list) do
+            local d = a - addr
+            if d % 32 == 0 and d > -512 and d < 512 then hit, n = a, n + 1 end
+        end
+        return n == 1 and hit or nil
+    end
+    local entry, dupes = {}, {}
+    for _, ir in ipairs(imageRows) do
+        local a, o = sibling(anims, ir[2]), sibling(offsets, ir[2])
+        if a and o then
+            if entry[ir[1]] then dupes[ir[1]] = true end
+            entry[ir[1]] = {a, o}
+        end
+    end
+
+    local synced, missed = 0, {}
+    for _, p in ipairs(pairList) do
+        local di, si = images[p[1]], images[p[2]]
+        local d, k = di and entry[di], si and entry[si]
+        local sa, so = k and rd(k[1]), k and rd(k[2])
+        local da, dof = d and rd(d[1]), d and rd(d[2])
+        if d and k and not dupes[di] and not dupes[si] and sa and so and da and dof and sa ~= 0 and so ~= 0 then
+            table.insert(skinDataRestores, {d[1], da})
+            table.insert(skinDataRestores, {d[2], dof})
+            wr(d[1], sa)
+            wr(d[2], so)
+            synced = synced + 1
+        elseif di and si then
+            missed[#missed + 1] = p[2]
+        end
+    end
+    return synced, (#missed > 0) and ("not found: " .. table.concat(missed, ", ")) or nil
+end
+
 local function applySkinSwapper()
     if not isfile or not readfile then
         return 0, "Executor does not support isfile/readfile functions."
@@ -1875,6 +1974,7 @@ local function applySkinSwapper()
                                 table.insert(skippedNoScript, weaponName .. "=" .. skinTarget)
                             elseif swapTwoWay(defModel, skinModel, wf) then
                                 swappedCount = swappedCount + 1
+                                table.insert(skinDataPairs, {weaponName, skinTarget})
                                 if defMod and skinMod then
                                     swapTwoWay(defMod, skinMod, baseMod)
                                 elseif ENABLE_SCRIPT_RENAMES and not baseMod then
@@ -2162,7 +2262,16 @@ pcall(function()
     end
 end)
 
-_G.__RIVALS_SKIN_CHANGER_STATE = {restores = memoryRestores, wfAddr = wf.Address, renames = renamedScripts}
+if ENABLE_SKIN_DATA_SYNC and #skinDataPairs > 0 then
+    print("[RivalsSkinChanger] Applying skin animations + offsets (memory scan, about 30s)...")
+    local okS, synced, note = pcall(syncSkinData, skinDataPairs)
+    if okS then
+        print("[RivalsSkinChanger] Skin animations + offsets applied: " .. tostring(synced) .. "/" .. #skinDataPairs .. (note and (" (" .. note .. ")") or ""))
+    else
+        print("[RivalsSkinChanger] Skin animation sync error: " .. tostring(synced))
+    end
+end
+_G.__RIVALS_SKIN_CHANGER_STATE = {restores = memoryRestores, wfAddr = wf.Address, renames = renamedScripts, skinData = skinDataRestores}
 
 -- No teardown hooks: Matcha doesn't support BindToClose, OnTeleport,
 -- TeleportInit, PlayerRemoving or AncestryChanged (they read as nil).
