@@ -27,6 +27,7 @@ end
 _G.__RIVALS_SKIN_CHANGER_RESTORE = nil
 _G.__RIVALS_SKIN_CHANGER_ACTIVE = nil
 
+if typeof(notify) == "function" then pcall(notify, "Starting - applying your skins...", "Rivals Skin Changer", 5) end
 local A = LP:WaitForChild("PlayerScripts", 5):WaitForChild("Assets", 5)
 local vm = A and A:WaitForChild("ViewModels", 5)
 local wf = vm and vm:WaitForChild("Weapons", 5)
@@ -79,12 +80,18 @@ local OFF = {
 
 -- Undo the previous run's swaps in this place before swapping again, from
 -- plain data that run left in _G.
+local prevEntrySlots = {}
 do
     local prev = _G.__RIVALS_SKIN_CHANGER_STATE
     _G.__RIVALS_SKIN_CHANGER_STATE = nil
     -- Same place only: after a teleport these addresses point into a destroyed DataModel.
     if type(prev) == "table" and type(prev.restores) == "table" and prev.wfAddr == wf.Address then
-        for _, r in ipairs(prev.restores) do
+        if type(prev.entrySlots) == "table" then prevEntrySlots = prev.entrySlots end
+        -- Newest first: a slot can have been swapped more than once (the old
+        -- version swapped a shared Default entry once per skin), and undoing
+        -- that oldest first leaves one instance in two slots.
+        for i = #prev.restores, 1, -1 do
+            local r = prev.restores[i]
             if r.defSlot and r.origDefInst then
                 wr(r.defSlot, r.origDefInst)
                 if r.origDefCtrl then wr(r.defSlot + 8, r.origDefCtrl) end
@@ -98,16 +105,9 @@ do
             if r.defAddr and r.origDefParent then wr(r.defAddr + OFF.Parent, r.origDefParent) end
             if r.skinAddr and r.origSkinParent then wr(r.skinAddr + OFF.Parent, r.origSkinParent) end
         end
-        local mo = LP.PlayerScripts:FindFirstChild("Modules")
-        local vms = mo and mo:FindFirstChild("ViewModels")
-        for _, rn in ipairs(prev.renames or {}) do
-            local fam = vms and vms:FindFirstChild(rn[1])
-            local m = fam and fam:FindFirstChild(rn[1])
-            if m then pcall(function() m.Name = rn[2] end) end
-        end
-        local sd = prev.skinData or {}
-        for i = #sd, 1, -1 do
-            if sd[i][2] then wr(sd[i][1], sd[i][2]) end
+        local nc = prev.nameCopies or {}
+        for i = #nc, 1, -1 do
+            if nc[i][2] then wr(nc[i][1], nc[i][2]) end
         end
     end
 end
@@ -1025,19 +1025,35 @@ local ENABLE_MODEL_SWAPS = true
 -- of the two is responsible hasn't been isolated, so both stay off.
 local ENABLE_RIG_FIXES = false
 local ENABLE_SOUND_REPLACEMENT = false
--- Renaming a skin script via the Lua API (m.Name = ...) crashed the next
--- teleport like the rig fixes and sound pass did: any property write through
--- the Lua API from Matcha does. Raw memory swaps do not.
-local ENABLE_SCRIPT_RENAMES = false
+-- Renaming through the Lua API (m.Name = ...) crashed the next teleport like
+-- every other Lua-API property write from Matcha. Names are interned: all
+-- instances with one name share one name object (same pointer, no use
+-- count), so an instance is renamed by pointing its NameContainer at another
+-- instance's name - a raw pointer write like the swaps.
+local ENABLE_NAME_COPIES = true
+local nameCopies = {}
+local function copyName(target, nameSource)
+    if not ENABLE_NAME_COPIES or not target or not nameSource then return false end
+    local slot = target.Address + OFF.NameContainer
+    local orig, name = rd(slot), rd(nameSource.Address + OFF.NameContainer)
+    if not orig or not name or orig == 0 or name == 0 then return false end
+    if orig ~= name then
+        table.insert(nameCopies, {slot, orig})
+        wr(slot, name)
+    end
+    return true
+end
 -- ItemLibrary.ViewModels[name] holds each skin's Animations table and
 -- RootPartOffset. The game reads the entry of the equipped item, which stays
 -- the default's, so a swapped-in skin model played the default's animations
 -- (detached key-skin parts) at the default's offset (oversized Arch Molotov).
 -- The default entry's two slots are pointed at the skin's values with raw
--- pointer writes, the same kind of write as the model swaps.
+-- pointer writes, the same kind of write as the model swaps. Its Image and
+-- ImageHighResolution are the hotbar and loadout icons (ItemLibrary:
+-- GetViewModelImage falls back to ViewModels[weapon] for a default skin),
+-- pointed at the skin's the same way.
 local ENABLE_SKIN_DATA_SYNC = true
 local skinDataPairs = {}
-local skinDataRestores = {}
 
 local function swapTwoWay(instA, instB, parentFolder)
     if not ENABLE_MODEL_SWAPS then return false end
@@ -1249,6 +1265,7 @@ local MISC_SPECIAL_MAP = {
     ["Evil Trident"] = { DeflectHitEffects = "Evil Trident", DeflectActiveEffects = "Evil Trident" },
     ["Saber"] = { DeflectHitEffects = "Saber", DeflectActiveEffects = "Saber" },
     ["Lightning Bolt"] = { DeflectHitEffects = "Lightning Bolt", DeflectActiveEffects = "Lightning Bolt" },
+    ["Riptide Katana"] = { DeflectHitEffects = "Riptide Katana", DeflectActiveEffects = "Riptide Katana" },
     ["Keythrower"] = { BurningEffects = "Keythrower", FlamethrowerFlames = "Keythrower", FlamethrowerAirblasts = "Keythrower" },
     ["Pixel Flamethrower"] = { BurningEffects = "Pixel Flamethrower", FlamethrowerFlames = "Pixel Flamethrower", FlamethrowerAirblasts = "Pixel Flamethrower" },
     ["Jack O'Thrower"] = { BurningEffects = "Jack O'Thrower", FlamethrowerFlames = "Jack O'Thrower" },
@@ -1256,6 +1273,7 @@ local MISC_SPECIAL_MAP = {
     ["Rainbowthrower"] = { BurningEffects = "Rainbowthrower", FlamethrowerFlames = "Rainbowthrower" },
     ["Glitterthrower"] = { BurningEffects = "Glitterthrower", FlamethrowerFlames = "Glitterthrower" },
     ["Extinguisher"] = { BurningEffects = "Extinguisher", FlamethrowerFlames = "Extinguisher" },
+    ["Bubblethrower"] = { BurningEffects = "Bubblethrower", FlamethrowerFlames = "Bubblethrower" },
     ["Temporal Ray"] = { FreezeEffects = "Temporal" },
     ["Bubble Ray"] = { FreezeEffects = "Bubble" },
     ["Spider Ray"] = { FreezeEffects = "Cocoon" },
@@ -1266,6 +1284,7 @@ local MISC_SPECIAL_MAP = {
     ["Balance"] = { SmokeClouds = "Balance" },
     ["Eyeball"] = { SmokeClouds = "Eyeball" },
     ["Hourglass"] = { SmokeClouds = "Hourglass" },
+    ["Beach Ball"] = { SmokeClouds = "Beach Ball" },
     ["Trampoline"] = { JumpPads = "Trampoline" },
     ["Bounce House"] = { JumpPads = "Bounce House" },
     ["Shady Chicken Sandwich"] = { JumpPads = "Shady Chicken Sandwich" },
@@ -1745,7 +1764,7 @@ end
 -- also Flashbang's, Smoke Grenade's and Warpstone's), so matching on those
 -- would change other weapons too. Images come from the decompiled
 -- ItemLibrary, since require() of game modules fails in Matcha.
-local function syncSkinData(pairList)
+local function syncSkinData(pairList, knownSlots)
     if type(decompile) ~= "function" or type(getgc) ~= "function" then
         return 0, "needs decompile and getgc"
     end
@@ -1772,18 +1791,20 @@ local function syncSkinData(pairList)
     if next(wanted) == nil then return 0, "no ItemLibrary entries for the swapped skins" end
 
     local job = game.JobId
-    local okG, rows = pcall(getgc, {"Image", "Animations", "RootPartOffset"})
+    local okG, rows = pcall(getgc, {"Image", "ImageHighResolution", "Animations", "RootPartOffset"})
     if not okG or type(rows) ~= "table" then return 0, "gc scan failed" end
     -- A teleport during the scan frees everything it found.
     if game.JobId ~= job then return 0, "server changed during the scan" end
 
     local q = string.char(34)
-    local anims, offsets, imageRows = {}, {}, {}
+    local anims, offsets, hires, imageRows = {}, {}, {}, {}
     for _, r in ipairs(rows) do
         if r.key == "Animations" then
             anims[#anims + 1] = r.addr
         elseif r.key == "RootPartOffset" then
             offsets[#offsets + 1] = r.addr
+        elseif r.key == "ImageHighResolution" then
+            hires[#hires + 1] = r.addr
         elseif r.key == "Image" and type(r.value) == "string" then
             local v = r.value
             if v:sub(1, 1) == q and v:sub(-1) == q then v = v:sub(2, -2) end
@@ -1799,28 +1820,51 @@ local function syncSkinData(pairList)
         end
         return n == 1 and hit or nil
     end
-    local entry, dupes = {}, {}
+    -- Slots per matching table: Animations, RootPartOffset, Image and
+    -- ImageHighResolution (false when absent). After a first run the default
+    -- entry carries the skin's Image too, so an image can match more than one
+    -- table; the skin's values are used only when all its matches agree.
+    local entries = {}
     for _, ir in ipairs(imageRows) do
         local a, o = sibling(anims, ir[2]), sibling(offsets, ir[2])
         if a and o then
-            if entry[ir[1]] then dupes[ir[1]] = true end
-            entry[ir[1]] = {a, o}
+            entries[ir[1]] = entries[ir[1]] or {}
+            table.insert(entries[ir[1]], {a, o, ir[2], sibling(hires, ir[2]) or false})
         end
     end
 
     local synced, missed = 0, {}
     for _, p in ipairs(pairList) do
-        local di, si = images[p[1]], images[p[2]]
-        local d, k = di and entry[di], si and entry[si]
-        local sa, so = k and rd(k[1]), k and rd(k[2])
-        local da, dof = d and rd(d[1]), d and rd(d[2])
-        if d and k and not dupes[di] and not dupes[si] and sa and so and da and dof and sa ~= 0 and so ~= 0 then
-            table.insert(skinDataRestores, {d[1], da})
-            table.insert(skinDataRestores, {d[2], dof})
-            wr(d[1], sa)
-            wr(d[2], so)
+        local ks = entries[images[p[2]] or ""]
+        -- On a re-run the default entry is found by the slots saved last time:
+        -- its Image already reads as the skin's.
+        local ds = knownSlots[p[1]] and {knownSlots[p[1]]} or entries[images[p[1]] or ""]
+        local vals
+        if ks then
+            vals = {rd(ks[1][1]), rd(ks[1][2]), rd(ks[1][3])}
+            for i = 1, #ks do
+                if i > 1 and (rd(ks[i][1]) ~= vals[1] or rd(ks[i][2]) ~= vals[2] or rd(ks[i][3]) ~= vals[3]) then
+                    vals = nil
+                    break
+                end
+                if ks[i][4] and not vals[4] then vals[4] = rd(ks[i][4]) end
+            end
+        end
+        local sa, so = vals and vals[1], vals and vals[2]
+        if ds and sa and so and vals[3] and sa ~= 0 and so ~= 0 and vals[3] ~= 0 then
+            -- Overwrite and never undo: the default's own tables lose their
+            -- last reference and get collected, so writing them back later
+            -- would leave a dangling pointer (crashed a same-server re-run).
+            -- The skin's tables stay referenced by the skin's entry, which
+            -- is never written to.
+            for _, d in ipairs(ds) do
+                for j = 1, 4 do
+                    if d[j] and vals[j] and vals[j] ~= 0 then wr(d[j], vals[j]) end
+                end
+            end
+            knownSlots[p[1]] = ds[1]
             synced = synced + 1
-        elseif di and si then
+        elseif images[p[1]] and images[p[2]] then
             missed[#missed + 1] = p[2]
         end
     end
@@ -1977,11 +2021,15 @@ local function applySkinSwapper()
                                 table.insert(skinDataPairs, {weaponName, skinTarget})
                                 if defMod and skinMod then
                                     swapTwoWay(defMod, skinMod, baseMod)
-                                elseif ENABLE_SCRIPT_RENAMES and not baseMod then
+                                elseif not baseMod then
+                                    -- The weapon's own module is the default and special skins
+                                    -- are its children (Gunblade > Keyblade), picked by viewmodel
+                                    -- name. The child takes the weapon's name; the module keeps
+                                    -- its own, so the child's require of ViewModels.<weapon>
+                                    -- still resolves.
                                     local fam = vmMods and vmMods:FindFirstChild(weaponName)
                                     local sm = fam and fam:FindFirstChild(skinTarget)
-                                    if sm and not fam:FindFirstChild(weaponName)
-                                        and pcall(function() sm.Name = weaponName end) then
+                                    if sm and not fam:FindFirstChild(weaponName) and copyName(sm, fam) then
                                         table.insert(renamedScripts, {weaponName, skinTarget})
                                     end
                                 end
@@ -2015,10 +2063,17 @@ local function applySkinSwapper()
                         for folderName, itemName in pairs(spec) do
                             local folder = mi:FindFirstChild(folderName)
                             if folder then
-                                local defItem = folder:FindFirstChild("Default") or folder:FindFirstChild(weaponName)
+                                -- Effects are looked up by viewmodel name with Default as the
+                                -- fallback (Katana: DeflectHitEffects:FindFirstChild(Name) or
+                                -- .Default). Default is what every other weapon using the folder
+                                -- falls back to - all fire weapons burn with BurningEffects.Default
+                                -- - so it is never touched: the skin's entry takes the weapon's name.
+                                local weaponItem = folder:FindFirstChild(weaponName)
                                 local skinItem = folder:FindFirstChild(itemName)
-                                if defItem and skinItem then
-                                    swapTwoWay(defItem, skinItem, folder)
+                                if skinItem and weaponItem then
+                                    swapTwoWay(weaponItem, skinItem, folder)
+                                elseif skinItem then
+                                    copyName(skinItem, wf:FindFirstChild(weaponName))
                                 end
                             end
                         end
@@ -2081,6 +2136,7 @@ if count == 0 then
 else
     local msg = "Swapped " .. tostring(count) .. " skins in " .. tostring(elapsed) .. "ms!"
     print("[RivalsSkinChanger] " .. msg)
+    notifyUser("Rivals Skin Changer", "Swapped " .. tostring(count) .. " skins - loading animations, offsets and icons...", 6)
 end
 
 -- Real-time 2D Icon Engine
@@ -2263,15 +2319,18 @@ pcall(function()
 end)
 
 if ENABLE_SKIN_DATA_SYNC and #skinDataPairs > 0 then
-    print("[RivalsSkinChanger] Applying skin animations + offsets (memory scan, about 30s)...")
-    local okS, synced, note = pcall(syncSkinData, skinDataPairs)
+    print("[RivalsSkinChanger] Applying skin animations, offsets + icons (memory scan, about 30s)...")
+    local okS, synced, note = pcall(syncSkinData, skinDataPairs, prevEntrySlots)
     if okS then
-        print("[RivalsSkinChanger] Skin animations + offsets applied: " .. tostring(synced) .. "/" .. #skinDataPairs .. (note and (" (" .. note .. ")") or ""))
+        local msg = "Animations, offsets + icons applied: " .. tostring(synced) .. "/" .. #skinDataPairs
+        print("[RivalsSkinChanger] " .. msg .. (note and (" (" .. note .. ")") or ""))
+        notifyUser("Rivals Skin Changer", msg, 6)
     else
         print("[RivalsSkinChanger] Skin animation sync error: " .. tostring(synced))
+        notifyUser("Rivals Skin Changer", "Animation sync failed - skins are still swapped", 6)
     end
 end
-_G.__RIVALS_SKIN_CHANGER_STATE = {restores = memoryRestores, wfAddr = wf.Address, renames = renamedScripts, skinData = skinDataRestores}
+_G.__RIVALS_SKIN_CHANGER_STATE = {restores = memoryRestores, wfAddr = wf.Address, nameCopies = nameCopies, entrySlots = prevEntrySlots}
 
 -- No teardown hooks: Matcha doesn't support BindToClose, OnTeleport,
 -- TeleportInit, PlayerRemoving or AncestryChanged (they read as nil).
