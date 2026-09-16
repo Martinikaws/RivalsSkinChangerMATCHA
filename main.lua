@@ -12,6 +12,12 @@ end
 
 if not game:IsLoaded() then game.Loaded:Wait() end
 
+-- Only run in RIVALS (universe 6035872082 covers the lobby and every match
+-- place); anywhere else, stop quietly.
+local RIVALS_GAME_ID = 6035872082
+local okGameId, gameId = pcall(function() return game.GameId end)
+if not okGameId or tonumber(gameId) ~= RIVALS_GAME_ID then return end
+
 local LP = game:GetService("Players").LocalPlayer
 while not LP do
     task.wait(0.05)
@@ -80,13 +86,13 @@ local OFF = {
 
 -- Undo the previous run's swaps in this place before swapping again, from
 -- plain data that run left in _G.
-local prevEntrySlots = {}
+local dictCache = {}
 do
     local prev = _G.__RIVALS_SKIN_CHANGER_STATE
     _G.__RIVALS_SKIN_CHANGER_STATE = nil
     -- Same place only: after a teleport these addresses point into a destroyed DataModel.
     if type(prev) == "table" and type(prev.restores) == "table" and prev.wfAddr == wf.Address then
-        if type(prev.entrySlots) == "table" then prevEntrySlots = prev.entrySlots end
+        if type(prev.dicts) == "table" then dictCache = prev.dicts end
         -- Newest first: a slot can have been swapped more than once (the old
         -- version swapped a shared Default entry once per skin), and undoing
         -- that oldest first leaves one instance in two slots.
@@ -1760,115 +1766,162 @@ local function parseConfigLine(rawLine)
 end
 
 -- Main ultra-fast skin swapper with comprehensive error diagnostics
--- Entries are found by Image: defaults share animation names (Grenade's are
--- also Flashbang's, Smoke Grenade's and Warpstone's), so matching on those
--- would change other weapons too. Images come from the decompiled
--- ItemLibrary, since require() of game modules fails in Matcha.
-local function syncSkinData(pairList, knownSlots)
-    if type(decompile) ~= "function" or type(getgc) ~= "function" then
-        return 0, "needs decompile and getgc"
-    end
-    local mods = game:GetService("ReplicatedStorage"):FindFirstChild("Modules")
-    local lib = mods and mods:FindFirstChild("ItemLibrary")
-    local okD, src = pcall(decompile, lib)
-    if not okD or type(src) ~= "string" then return 0, "ItemLibrary could not be decompiled" end
-    local rpoAt = src:find('["RootPartOffset"]', 1, true)
-    local ctor
-    for name, pos in src:gmatch("local function ([%w_]+)%(()") do
-        if rpoAt and pos < rpoAt then ctor = name end
-    end
-    if not ctor then return 0, "ViewModels constructor not found" end
-    local images = {}
-    for name, im in src:gmatch(ctor .. '%("([^"]+)", "(rbxassetid://%d+)"') do images[name] = im end
+-- ItemLibrary.ViewModels and CosmeticLibrary.Cosmetics are dictionaries keyed
+-- by weapon, skin and wrap name. One memory scan finds the two dictionaries
+-- (a re-run in the same server reuses where they were and skips it); entries
+-- and their fields are then read straight from the tables' node arrays -
+-- 32-byte nodes with the value at +0 and a key string pointer at +16 whose
+-- text starts at +24 - which takes milliseconds. Matching entries by animation
+-- names would hit other weapons (Grenade's are also Flashbang's), and
+-- decompile(), which this used to read ItemLibrary with, now fails in Matcha
+-- ("Decompiler: Error 500").
+local NODE_SIZE, NODE_KEY, STRING_DATA = 32, 16, 24
 
-    local wanted = {}
-    for _, p in ipairs(pairList) do
-        if images[p[1]] and images[p[2]] then
-            wanted[images[p[1]]] = true
-            wanted[images[p[2]]] = true
+local function nodeKey(node)
+    local kp = rd(node + NODE_KEY)
+    if not kp or kp < 0x10000 then return nil end
+    local ok, str = pcall(mrd, "string", kp + STRING_DATA)
+    if ok and type(str) == "string" and #str > 0 and #str < 80 then return str end
+end
+
+-- Wanted keys met walking up to maxNodes nodes from base. The first match wins,
+-- so memory past the array's end can't shadow a real key; a start with no
+-- readable key in 64 nodes isn't a node array.
+local function walkNodes(base, maxNodes, wanted)
+    local found, n, readable = {}, 0, 0
+    for i = 0, maxNodes - 1 do
+        local node = base + i * NODE_SIZE
+        local k = nodeKey(node)
+        if k then
+            readable = readable + 1
+            if wanted[k] and not found[k] then found[k], n = node, n + 1 end
+        end
+        if i == 63 and readable == 0 then break end
+    end
+    return found, n
+end
+
+-- A table's node array is the header pointer whose walk meets the most wanted keys.
+local function tableFields(t, maxNodes, wanted)
+    if not t or t < 0x10000 then return nil, 0 end
+    local best, bestN, bestBase = nil, 0, nil
+    for off = 0, 56, 8 do
+        local base = rd(t + off)
+        if base and base > 0x10000 then
+            local found, n = walkNodes(base, maxNodes, wanted)
+            if n > bestN then best, bestN, bestBase = found, n, base end
         end
     end
-    if next(wanted) == nil then return 0, "no ItemLibrary entries for the swapped skins" end
+    return best, bestN, bestBase
+end
+
+local VM_ANCHOR, COS_ANCHOR = {["Assault Rifle"] = true}, {["Glass"] = true}
+
+-- Node arrays of ViewModels and Cosmetics. The module tables are told apart
+-- from other tables with those keys by a neighbour: ItemLibrary keeps
+-- ViewModelOrder next to ViewModels, CosmeticLibrary CosmeticsAlphabetized
+-- next to Cosmetics.
+local function findDictionaries(cache, needVm, needCos)
+    local vm, cos = nil, nil
+    if needVm and cache.vm and select(2, walkNodes(cache.vm, 2048, VM_ANCHOR)) > 0 then vm = cache.vm end
+    if needCos and cache.cos and select(2, walkNodes(cache.cos, 4096, COS_ANCHOR)) > 0 then cos = cache.cos end
+    if (vm or not needVm) and (cos or not needCos) then return vm, cos end
 
     local job = game.JobId
-    local okG, rows = pcall(getgc, {"Image", "ImageHighResolution", "Animations", "RootPartOffset"})
-    if not okG or type(rows) ~= "table" then return 0, "gc scan failed" end
+    local okG, rows = pcall(getgc, {"ViewModels", "Cosmetics"})
+    if not okG or type(rows) ~= "table" then return vm, cos, "gc scan failed" end
     -- A teleport during the scan frees everything it found.
-    if game.JobId ~= job then return 0, "server changed during the scan" end
+    if game.JobId ~= job then return nil, nil, "server changed during the scan" end
+    local function pick(requireMarker)
+        for _, r in ipairs(rows) do
+            local wantVm, wantCos = r.key == "ViewModels" and needVm and not vm, r.key == "Cosmetics" and needCos and not cos
+            if wantVm or wantCos then
+                local isModule = not requireMarker
+                if requireMarker then
+                    local marker = wantVm and "ViewModelOrder" or "CosmeticsAlphabetized"
+                    for i = -128, 128 do
+                        if nodeKey(r.addr + i * NODE_SIZE) == marker then isModule = true break end
+                    end
+                end
+                if isModule then
+                    local _, n, base = tableFields(rd(r.addr), wantVm and 2048 or 4096, wantVm and VM_ANCHOR or COS_ANCHOR)
+                    if n > 0 then
+                        if wantVm then vm = base else cos = base end
+                    end
+                end
+            end
+        end
+    end
+    pick(true)
+    -- A module table too big to see the neighbour from the key: take any table
+    -- under that key whose array holds the anchor name.
+    if (needVm and not vm) or (needCos and not cos) then pick(false) end
+    cache.vm, cache.cos = vm or cache.vm, cos or cache.cos
+    return vm, cos
+end
 
-    local q = string.char(34)
-    local anims, offsets, hires, imageRows = {}, {}, {}, {}
-    for _, r in ipairs(rows) do
-        if r.key == "Animations" then
-            anims[#anims + 1] = r.addr
-        elseif r.key == "RootPartOffset" then
-            offsets[#offsets + 1] = r.addr
-        elseif r.key == "ImageHighResolution" then
-            hires[#hires + 1] = r.addr
-        elseif r.key == "Image" and type(r.value) == "string" then
-            local v = r.value
-            if v:sub(1, 1) == q and v:sub(-1) == q then v = v:sub(2, -2) end
-            if wanted[v] then imageRows[#imageRows + 1] = {v, r.addr} end
-        end
-    end
-    -- Slots of one table share one array of 32-byte nodes.
-    local function sibling(list, addr)
-        local hit, n = nil, 0
-        for _, a in ipairs(list) do
-            local d = a - addr
-            if d % 32 == 0 and d > -512 and d < 512 then hit, n = a, n + 1 end
-        end
-        return n == 1 and hit or nil
-    end
-    -- Slots per matching table: Animations, RootPartOffset, Image and
-    -- ImageHighResolution (false when absent). After a first run the default
-    -- entry carries the skin's Image too, so an image can match more than one
-    -- table; the skin's values are used only when all its matches agree.
-    local entries = {}
-    for _, ir in ipairs(imageRows) do
-        local a, o = sibling(anims, ir[2]), sibling(offsets, ir[2])
-        if a and o then
-            entries[ir[1]] = entries[ir[1]] or {}
-            table.insert(entries[ir[1]], {a, o, ir[2], sibling(hires, ir[2]) or false})
+local VM_FIELDS = {Animations = true, RootPartOffset = true, Image = true, ImageHighResolution = true}
+local WRAP_FIELDS = {WrapGroups = true}
+
+local function syncSkinData(pairList, wrapPairs, cache)
+    if #pairList == 0 and #wrapPairs == 0 then return 0 end
+    local vm, cos, err = findDictionaries(cache, #pairList > 0, #wrapPairs > 0)
+    if #pairList > 0 and not vm and #wrapPairs > 0 and not cos then return 0, err or "item dictionaries not found" end
+
+    local vmWanted, cosWanted = {}, {}
+    for _, p in ipairs(pairList) do vmWanted[p[1]], vmWanted[p[2]] = true, true end
+    for _, p in ipairs(wrapPairs) do cosWanted[p[1]], cosWanted[p[2]] = true, true end
+    local vmNodes = vm and (walkNodes(vm, 2048, vmWanted)) or {}
+    local cosNodes = cos and (walkNodes(cos, 4096, cosWanted)) or {}
+
+    -- Animations, RootPartOffset, Image, ImageHighResolution slots (false when absent).
+    local function viewModelSlots(name)
+        local node = vmNodes[name]
+        local f = node and tableFields(rd(node), 32, VM_FIELDS)
+        if f and f.Animations and f.RootPartOffset then
+            return {f.Animations, f.RootPartOffset, f.Image or false, f.ImageHighResolution or false}
         end
     end
 
     local synced, missed = 0, {}
     for _, p in ipairs(pairList) do
-        local ks = entries[images[p[2]] or ""]
-        -- On a re-run the default entry is found by the slots saved last time:
-        -- its Image already reads as the skin's.
-        local ds = knownSlots[p[1]] and {knownSlots[p[1]]} or entries[images[p[1]] or ""]
-        local vals
-        if ks then
-            vals = {rd(ks[1][1]), rd(ks[1][2]), rd(ks[1][3])}
-            for i = 1, #ks do
-                if i > 1 and (rd(ks[i][1]) ~= vals[1] or rd(ks[i][2]) ~= vals[2] or rd(ks[i][3]) ~= vals[3]) then
-                    vals = nil
-                    break
-                end
-                if ks[i][4] and not vals[4] then vals[4] = rd(ks[i][4]) end
-            end
-        end
-        local sa, so = vals and vals[1], vals and vals[2]
-        if ds and sa and so and vals[3] and sa ~= 0 and so ~= 0 and vals[3] ~= 0 then
+        local d, k = viewModelSlots(p[1]), viewModelSlots(p[2])
+        local vals = k and {rd(k[1]), rd(k[2]), k[3] and rd(k[3]), k[4] and rd(k[4])}
+        if d and vals and vals[1] and vals[2] and vals[1] ~= 0 and vals[2] ~= 0 then
             -- Overwrite and never undo: the default's own tables lose their
             -- last reference and get collected, so writing them back later
             -- would leave a dangling pointer (crashed a same-server re-run).
-            -- The skin's tables stay referenced by the skin's entry, which
-            -- is never written to.
-            for _, d in ipairs(ds) do
-                for j = 1, 4 do
-                    if d[j] and vals[j] and vals[j] ~= 0 then wr(d[j], vals[j]) end
-                end
+            -- The skin's tables stay referenced by the skin's entry, which is
+            -- never written to.
+            for j = 1, 4 do
+                if d[j] and vals[j] and vals[j] ~= 0 then wr(d[j], vals[j]) end
             end
-            knownSlots[p[1]] = ds[1]
             synced = synced + 1
-        elseif images[p[1]] and images[p[2]] then
+        else
             missed[#missed + 1] = p[2]
         end
     end
-    return synced, (#missed > 0) and ("not found: " .. table.concat(missed, ", ")) or nil
+
+    -- Wraps: the owned wrap's WrapGroups slot points at the target's table,
+    -- the same overwrite-never-undo write.
+    local function wrapGroupsSlot(name)
+        local node = cosNodes[name]
+        local f = node and tableFields(rd(node), 32, WRAP_FIELDS)
+        return f and f.WrapGroups
+    end
+    local wrapsApplied, wrapsMissed = 0, {}
+    for _, p in ipairs(wrapPairs) do
+        local ownedSlot, targetSlot = wrapGroupsSlot(p[1]), wrapGroupsSlot(p[2])
+        local targetGroups = targetSlot and rd(targetSlot)
+        if ownedSlot and targetGroups and targetGroups ~= 0 and ownedSlot ~= targetSlot then
+            wr(ownedSlot, targetGroups)
+            wrapsApplied = wrapsApplied + 1
+        else
+            wrapsMissed[#wrapsMissed + 1] = p[1] .. "=" .. p[2]
+        end
+    end
+    local note = (#missed > 0) and ("not found: " .. table.concat(missed, ", ")) or err
+    return synced, note, wrapsApplied, wrapsMissed
 end
 
 local function applySkinSwapper()
@@ -2318,19 +2371,47 @@ pcall(function()
     end
 end)
 
-if ENABLE_SKIN_DATA_SYNC and #skinDataPairs > 0 then
-    print("[RivalsSkinChanger] Applying skin animations, offsets + icons (memory scan, about 30s)...")
-    local okS, synced, note = pcall(syncSkinData, skinDataPairs, prevEntrySlots)
+-- Wraps set on the skin site's Wraps tab (OwnedWrap=TargetWrap), applied in
+-- the same memory scan as the skin data; RivalsWrapChanger.lua is no longer
+-- needed alongside this script.
+local function readWrapPairs()
+    local list = {}
+    for _, p in ipairs({"rivals_wraps.lua", "rivals_wraps.txt", "workspace/rivals_wraps.lua", "workspace/rivals_wraps.txt"}) do
+        local okE, exists = pcall(isfile, p)
+        if okE and exists then
+            local okR, content = pcall(readfile, p)
+            if okR and content then
+                for line in content:gmatch("[^\r\n]+") do
+                    -- Lines starting with - are comments.
+                    local owned, target = line:match("^%s*([^=%-][^=]-)%s*=%s*(.-)%s*$")
+                    if owned and target and target ~= "" then table.insert(list, {owned, target}) end
+                end
+                break
+            end
+        end
+    end
+    return list
+end
+
+local wrapPairs = readWrapPairs()
+if ENABLE_SKIN_DATA_SYNC and (#skinDataPairs > 0 or #wrapPairs > 0) then
+    print("[RivalsSkinChanger] Applying skin animations, offsets, icons" .. (#wrapPairs > 0 and " + wraps" or "") .. " (memory scan, about 40s; a re-run in this server skips it)...")
+    local tSync = tick()
+    local okS, synced, note, wrapsApplied, wrapsMissed = pcall(syncSkinData, skinDataPairs, wrapPairs, dictCache)
     if okS then
-        local msg = "Animations, offsets + icons applied: " .. tostring(synced) .. "/" .. #skinDataPairs
-        print("[RivalsSkinChanger] " .. msg .. (note and (" (" .. note .. ")") or ""))
+        local parts = {}
+        if #skinDataPairs > 0 then parts[#parts + 1] = "Animations, offsets + icons applied: " .. tostring(synced) .. "/" .. #skinDataPairs end
+        if #wrapPairs > 0 then parts[#parts + 1] = "Wraps applied: " .. tostring(wrapsApplied or 0) .. "/" .. #wrapPairs end
+        local msg = table.concat(parts, " | ")
+        local wrapNote = (wrapsMissed and #wrapsMissed > 0) and (" (wraps not found: " .. table.concat(wrapsMissed, ", ") .. ")") or ""
+        print("[RivalsSkinChanger] " .. msg .. (note and (" (" .. note .. ")") or "") .. wrapNote .. string.format(" in %.1fs", tick() - tSync))
         notifyUser("Rivals Skin Changer", msg, 6)
     else
         print("[RivalsSkinChanger] Skin animation sync error: " .. tostring(synced))
         notifyUser("Rivals Skin Changer", "Animation sync failed - skins are still swapped", 6)
     end
 end
-_G.__RIVALS_SKIN_CHANGER_STATE = {restores = memoryRestores, wfAddr = wf.Address, nameCopies = nameCopies, entrySlots = prevEntrySlots}
+_G.__RIVALS_SKIN_CHANGER_STATE = {restores = memoryRestores, wfAddr = wf.Address, nameCopies = nameCopies, dicts = dictCache}
 
 -- No teardown hooks: Matcha doesn't support BindToClose, OnTeleport,
 -- TeleportInit, PlayerRemoving or AncestryChanged (they read as nil).
