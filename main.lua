@@ -1816,48 +1816,70 @@ local function tableFields(t, maxNodes, wanted)
 end
 
 local VM_ANCHOR, COS_ANCHOR = {["Assault Rifle"] = true}, {["Glass"] = true}
+-- AK-47 is a key in both dictionaries (its viewmodel in ViewModels, the skin in
+-- Cosmetics) and rare as a key anywhere else, so one scan for it lands inside
+-- both. A scan's time grows with the keys it looks for: about 23s for one key
+-- against 41-50s for ViewModels + Cosmetics.
+local SCAN_KEY = "AK-47"
 
--- Node arrays of ViewModels and Cosmetics. The module tables are told apart
--- from other tables with those keys by a neighbour: ItemLibrary keeps
--- ViewModelOrder next to ViewModels, CosmeticLibrary CosmeticsAlphabetized
--- next to Cosmetics.
+-- Wanted keys met walking out from a node of a dictionary, nearest first, up
+-- to span nodes each way, so the dictionary's own nodes are met before
+-- anything past its ends.
+local function walkAround(center, span, wanted)
+    local found, n = {}, 0
+    local function visit(node)
+        local k = nodeKey(node)
+        if k and wanted[k] and not found[k] then found[k], n = node, n + 1 end
+    end
+    visit(center)
+    for i = 1, span do
+        visit(center + i * NODE_SIZE)
+        visit(center - i * NODE_SIZE)
+    end
+    return found, n
+end
+
+-- A node inside ItemLibrary.ViewModels and one inside CosmeticLibrary.Cosmetics.
 local function findDictionaries(cache, needVm, needCos)
     local vm, cos = nil, nil
-    if needVm and cache.vm and select(2, walkNodes(cache.vm, 2048, VM_ANCHOR)) > 0 then vm = cache.vm end
-    if needCos and cache.cos and select(2, walkNodes(cache.cos, 4096, COS_ANCHOR)) > 0 then cos = cache.cos end
+    if needVm and cache.vm and select(2, walkAround(cache.vm, 2048, VM_ANCHOR)) > 0 then vm = cache.vm end
+    if needCos and cache.cos and select(2, walkAround(cache.cos, 4096, COS_ANCHOR)) > 0 then cos = cache.cos end
     if (vm or not needVm) and (cos or not needCos) then return vm, cos end
 
     local job = game.JobId
-    local okG, rows = pcall(getgc, {"ViewModels", "Cosmetics"})
-    if not okG or type(rows) ~= "table" then return vm, cos, "gc scan failed" end
+    local okG, rows = pcall(getgc, {SCAN_KEY})
     -- A teleport during the scan frees everything it found.
     if game.JobId ~= job then return nil, nil, "server changed during the scan" end
-    local function pick(requireMarker)
-        for _, r in ipairs(rows) do
-            local wantVm, wantCos = r.key == "ViewModels" and needVm and not vm, r.key == "Cosmetics" and needCos and not cos
-            if wantVm or wantCos then
-                local isModule = not requireMarker
-                if requireMarker then
-                    local marker = wantVm and "ViewModelOrder" or "CosmeticsAlphabetized"
-                    for i = -128, 128 do
-                        if nodeKey(r.addr + i * NODE_SIZE) == marker then isModule = true break end
-                    end
-                end
-                if isModule then
-                    local _, n, base = tableFields(rd(r.addr), wantVm and 2048 or 4096, wantVm and VM_ANCHOR or COS_ANCHOR)
-                    if n > 0 then
-                        if wantVm then vm = base else cos = base end
-                    end
-                end
-            end
+    for _, r in ipairs(okG and type(rows) == "table" and rows or {}) do
+        -- The node's value tells the dictionaries apart: a ViewModels entry has
+        -- Animations, a Cosmetics entry Rarity and Type. The full dictionary
+        -- (not a partial copy) also holds the anchor name.
+        local f = tableFields(rd(r.addr), 32, {Animations = true, Rarity = true, Type = true})
+        if f and f.Animations then
+            if needVm and not vm and select(2, walkAround(r.addr, 2048, VM_ANCHOR)) > 0 then vm = r.addr end
+        elseif f and f.Rarity and f.Type then
+            if needCos and not cos and select(2, walkAround(r.addr, 4096, COS_ANCHOR)) > 0 then cos = r.addr end
         end
     end
-    pick(true)
-    -- A module table too big to see the neighbour from the key: take any table
-    -- under that key whose array holds the anchor name.
-    if (needVm and not vm) or (needCos and not cos) then pick(false) end
+
+    -- AK-47 renamed or gone in a future update: find the dictionaries by the
+    -- module fields instead (slower, two keys).
+    if (needVm and not vm) or (needCos and not cos) then
+        if game.JobId ~= job then return nil, nil, "server changed during the scan" end
+        local okF, frows = pcall(getgc, {"ViewModels", "Cosmetics"})
+        for _, r in ipairs(okF and type(frows) == "table" and frows or {}) do
+            if r.key == "ViewModels" and needVm and not vm then
+                local f = tableFields(rd(r.addr), 2048, VM_ANCHOR)
+                vm = f and f["Assault Rifle"] or vm
+            elseif r.key == "Cosmetics" and needCos and not cos then
+                local f = tableFields(rd(r.addr), 4096, COS_ANCHOR)
+                cos = f and f["Glass"] or cos
+            end
+        end
+        if game.JobId ~= job then return nil, nil, "server changed during the scan" end
+    end
     cache.vm, cache.cos = vm or cache.vm, cos or cache.cos
-    return vm, cos
+    return vm, cos, (not okG) and "gc scan failed" or nil
 end
 
 local VM_FIELDS = {Animations = true, RootPartOffset = true, Image = true, ImageHighResolution = true}
@@ -1871,8 +1893,8 @@ local function syncSkinData(pairList, wrapPairs, cache)
     local vmWanted, cosWanted = {}, {}
     for _, p in ipairs(pairList) do vmWanted[p[1]], vmWanted[p[2]] = true, true end
     for _, p in ipairs(wrapPairs) do cosWanted[p[1]], cosWanted[p[2]] = true, true end
-    local vmNodes = vm and (walkNodes(vm, 2048, vmWanted)) or {}
-    local cosNodes = cos and (walkNodes(cos, 4096, cosWanted)) or {}
+    local vmNodes = vm and (walkAround(vm, 2048, vmWanted)) or {}
+    local cosNodes = cos and (walkAround(cos, 4096, cosWanted)) or {}
 
     -- Animations, RootPartOffset, Image, ImageHighResolution slots (false when absent).
     local function viewModelSlots(name)
@@ -2395,7 +2417,7 @@ end
 
 local wrapPairs = readWrapPairs()
 if ENABLE_SKIN_DATA_SYNC and (#skinDataPairs > 0 or #wrapPairs > 0) then
-    print("[RivalsSkinChanger] Applying skin animations, offsets, icons" .. (#wrapPairs > 0 and " + wraps" or "") .. " (memory scan, about 40s; a re-run in this server skips it)...")
+    print("[RivalsSkinChanger] Applying skin animations, offsets, icons" .. (#wrapPairs > 0 and " + wraps" or "") .. " (memory scan, about 25s; a re-run in this server skips it)...")
     local tSync = tick()
     local okS, synced, note, wrapsApplied, wrapsMissed = pcall(syncSkinData, skinDataPairs, wrapPairs, dictCache)
     if okS then
