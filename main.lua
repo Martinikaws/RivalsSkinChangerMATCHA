@@ -1060,6 +1060,10 @@ end
 -- pointed at the skin's the same way.
 local ENABLE_SKIN_DATA_SYNC = true
 local skinDataPairs = {}
+-- OwnedWrap=TargetWrap lines from the config's [Wraps] section. The site saves
+-- skins, skin swaps and wraps in one rivals_config.lua; rivals_wraps.lua is
+-- still read after it for configs saved by the older site.
+local configWrapPairs = {}
 
 local function swapTwoWay(instA, instB, parentFolder)
     if not ENABLE_MODEL_SWAPS then return false end
@@ -1735,6 +1739,15 @@ local function notifyUser(title, text, duration)
     end)
 end
 
+-- Skin swap lines: "Weapon | OwnedSkin > TargetSkin" - equip OwnedSkin and it
+-- looks like TargetSkin. They have no "=" or ":", so older builds skip them.
+local function parseSkinSwapLine(rawLine)
+    local l = rawLine:gsub(string.char(13), "")
+    if l:match("^%s*%-%-") then return nil end
+    local w, o, t = l:match("^%s*([^|]-)%s*|%s*([^>]-)%s*>%s*(.-)%s*$")
+    if w and o and t and #w > 0 and #o > 0 and #t > 0 and o ~= t then return w, o, t end
+end
+
 -- Robust Config Line Parser
 local function parseConfigLine(rawLine)
     local l = rawLine:gsub(string.char(13), ""):gsub(string.char(10), ""):match("^%s*(.-)%s*$")
@@ -2019,14 +2032,53 @@ local function applySkinSwapper()
     local vmMods = LP.PlayerScripts:FindFirstChild("Modules")
     vmMods = vmMods and vmMods:FindFirstChild("ViewModels")
 
-    for _, rawLine in ipairs(r2:split(string.char(10))) do 
-        local weaponName, skinTarget = parseConfigLine(rawLine)
-        if weaponName and skinTarget then
-            parsedPairs = parsedPairs + 1
-            local skinLower = skinTarget:lower()
-            if skinLower ~= "default" and skinLower ~= "standard" then
+    -- Each job is {weapon, target skin, source}: the source is the weapon for
+    -- Weapon=Skin lines and the owned skin for swap lines. The equipped item's
+    -- viewmodel name is the weapon for a default and the skin's name for a
+    -- skin, and the game finds the model, script, effects and ItemLibrary entry
+    -- by that name, so a swap line redirects the same things from the owned
+    -- skin's name. Swap lines run after every Weapon=Skin line.
+    local jobs, swapJobs, touched, skippedConflicts = {}, {}, {}, {}
+    -- A "[Wraps]" header switches the rest of the file (until another header)
+    -- to OwnedWrap=TargetWrap lines, so one config file holds everything.
+    local section = "skins"
+    for _, rawLine in ipairs(r2:split(string.char(10))) do
+        local header = rawLine:gsub(string.char(13), ""):match("^%s*%[%s*(.-)%s*%]%s*$")
+        if header then
+            section = header:lower():find("wrap") and "wraps" or "skins"
+        elseif section == "wraps" then
+            local owned, target = parseConfigLine(rawLine)
+            if owned and target then configWrapPairs[#configWrapPairs + 1] = {owned, target} end
+        else
+            local weaponName, skinTarget = parseConfigLine(rawLine)
+            if weaponName and skinTarget then
+                jobs[#jobs + 1] = {weaponName, skinTarget, weaponName}
+            else
+                local w, owned, target = parseSkinSwapLine(rawLine)
+                if w then swapJobs[#swapJobs + 1] = {w, target, owned} end
+            end
+        end
+    end
+    for _, j in ipairs(swapJobs) do jobs[#jobs + 1] = j end
+
+    for _, job in ipairs(jobs) do
+        local weaponName, skinTarget, srcName = job[1], job[2], job[3]
+        local ownedSwap = srcName ~= weaponName
+        parsedPairs = parsedPairs + 1
+        local skinLower = skinTarget:lower()
+        local isSkin = skinLower ~= "default" and skinLower ~= "standard"
+        -- A model is swapped once: a second line on the same skin would swap it back.
+        if isSkin and (touched[skinTarget] or touched[srcName]) then
+            table.insert(skippedConflicts, srcName .. " -> " .. skinTarget)
+        else
+            if isSkin then
+                touched[skinTarget], touched[srcName] = true, true
                 nonDefaultPairs = nonDefaultPairs + 1
-                ACTIVE_CONFIG_SKINS[weaponName] = skinTarget
+                if not ownedSwap then ACTIVE_CONFIG_SKINS[weaponName] = skinTarget end
+                local function findSource()
+                    if ownedSwap then return findSkinModel(srcName) end
+                    return wf:FindFirstChild(weaponName)
+                end
                 
                 -- 1. Viewmodel 3D Model Memory Swapping
                 -- wf existing doesn't mean every weapon slot inside it has
@@ -2035,16 +2087,16 @@ local function applySkinSwapper()
                 -- reported it missing worked immediately, so the object just
                 -- wasn't there yet at the moment this specific line ran.
                 -- Retry the base-weapon lookup too, not just the skin lookup.
-                local defModel = wf:FindFirstChild(weaponName)
+                local defModel = findSource()
                 if not defModel then
                     for _ = 1, 6 do
                         task.wait(0.5)
-                        defModel = wf:FindFirstChild(weaponName)
+                        defModel = findSource()
                         if defModel then break end
                     end
                 end
                 if not defModel then
-                    table.insert(missingBaseWeapons, weaponName)
+                    table.insert(missingBaseWeapons, srcName)
                 else
                     -- A skin-case folder can exist while its own children -
                     -- especially heavier multi-part skins - are still
@@ -2087,15 +2139,31 @@ local function applySkinSwapper()
                             -- name. Swap it with the model or the default script drives the skin
                             -- model, indexes parts it lacks, and the gun never builds.
                             local baseMod = vmMods and vmMods:FindFirstChild("Base" .. (weaponName:gsub(" ", "")))
-                            local defMod = baseMod and baseMod:FindFirstChild(weaponName)
+                            local defMod = baseMod and baseMod:FindFirstChild(srcName)
                             local skinMod = baseMod and baseMod:FindFirstChild(skinTarget)
-                            if defMod and not skinMod then
+                            if defMod and not skinMod and not ownedSwap then
                                 table.insert(skippedNoScript, weaponName .. "=" .. skinTarget)
                             elseif swapTwoWay(defModel, skinModel, wf) then
                                 swappedCount = swappedCount + 1
-                                table.insert(skinDataPairs, {weaponName, skinTarget})
+                                table.insert(skinDataPairs, {srcName, skinTarget})
                                 if defMod and skinMod then
                                     swapTwoWay(defMod, skinMod, baseMod)
+                                elseif ownedSwap then
+                                    -- The model swap moved the names: skinModel now carries
+                                    -- the owned skin's name, defModel the target's. A target
+                                    -- script takes the owned name; an owned script with no
+                                    -- target counterpart takes the target's, so the family
+                                    -- default drives the model.
+                                    local fam = baseMod or (vmMods and vmMods:FindFirstChild(weaponName))
+                                    local om = fam and fam:FindFirstChild(srcName)
+                                    local sm = fam and fam:FindFirstChild(skinTarget)
+                                    if om and sm then
+                                        swapTwoWay(om, sm, fam)
+                                    elseif sm and copyName(sm, skinModel) then
+                                        table.insert(renamedScripts, {srcName, skinTarget})
+                                    elseif om then
+                                        copyName(om, defModel)
+                                    end
                                 elseif not baseMod then
                                     -- The weapon's own module is the default and special skins
                                     -- are its children (Gunblade > Keyblade), picked by viewmodel
@@ -2115,7 +2183,7 @@ local function applySkinSwapper()
                 
                 -- 2. Throwables 3D Model Swapping (Molotov, Grenade, Flashbang, Satchel, Warpstone)
                 if tf and THROWABLES_NAMES[weaponName] then
-                    local tb = tf:FindFirstChild(weaponName)
+                    local tb = tf:FindFirstChild(srcName)
                     local ts = tf:FindFirstChild(skinTarget)
                     if tb and ts then
                         swapTwoWay(tb, ts, tf)
@@ -2124,7 +2192,7 @@ local function applySkinSwapper()
                 
                 -- 3. Projectiles 3D Model Swapping (RPG, Bow, Crossbow, Slingshot, Freeze Ray, Distortion, Permafrost)
                 if pf and PROJECTILES_NAMES[weaponName] then
-                    local pb = pf:FindFirstChild(weaponName)
+                    local pb = pf:FindFirstChild(srcName)
                     local ps = pf:FindFirstChild(skinTarget)
                     if pb and ps then
                         swapTwoWay(pb, ps, pf)
@@ -2143,12 +2211,12 @@ local function applySkinSwapper()
                                 -- .Default). Default is what every other weapon using the folder
                                 -- falls back to - all fire weapons burn with BurningEffects.Default
                                 -- - so it is never touched: the skin's entry takes the weapon's name.
-                                local weaponItem = folder:FindFirstChild(weaponName)
+                                local weaponItem = folder:FindFirstChild(srcName)
                                 local skinItem = folder:FindFirstChild(itemName)
                                 if skinItem and weaponItem then
                                     swapTwoWay(weaponItem, skinItem, folder)
                                 elseif skinItem then
-                                    copyName(skinItem, wf:FindFirstChild(weaponName))
+                                    copyName(skinItem, ownedSwap and findSkinModel(srcName) or wf:FindFirstChild(weaponName))
                                 end
                             end
                         end
@@ -2156,7 +2224,10 @@ local function applySkinSwapper()
                     
                     -- Explosion particles in Misc
                     local expSkin = MISC_EXPLOSIONS_MAP[skinTarget]
-                    local expBase = MISC_EXPLOSIONS_BASE[weaponName]
+                    -- An owned skin swaps only its own explosion: the weapon's base
+                    -- one belongs to the default.
+                    local expBase = MISC_EXPLOSIONS_MAP[srcName]
+                    if not ownedSwap then expBase = MISC_EXPLOSIONS_BASE[weaponName] end
                     if expSkin and expBase then
                         local sx = mi:FindFirstChild(expSkin)
                         local dx = mi:FindFirstChild(expBase)
@@ -2186,6 +2257,9 @@ local function applySkinSwapper()
         end
     end
 
+    if #skippedConflicts > 0 then
+        print("[RivalsSkinChanger] Skipped (skin already used by another line): " .. table.concat(skippedConflicts, ", "))
+    end
     if #skippedNoScript > 0 then
         print("[RivalsSkinChanger] Left default (skin has no viewmodel script of its own): " .. table.concat(skippedNoScript, ", "))
     end
@@ -2397,7 +2471,15 @@ end)
 -- the same memory scan as the skin data; RivalsWrapChanger.lua is no longer
 -- needed alongside this script.
 local function readWrapPairs()
-    local list = {}
+    local list, seen = {}, {}
+    -- The config file's [Wraps] section wins; a leftover rivals_wraps.lua only
+    -- adds wraps it doesn't mention.
+    for _, p in ipairs(configWrapPairs) do
+        if not seen[p[1]] then
+            seen[p[1]] = true
+            list[#list + 1] = p
+        end
+    end
     for _, p in ipairs({"rivals_wraps.lua", "rivals_wraps.txt", "workspace/rivals_wraps.lua", "workspace/rivals_wraps.txt"}) do
         local okE, exists = pcall(isfile, p)
         if okE and exists then
@@ -2406,7 +2488,10 @@ local function readWrapPairs()
                 for line in content:gmatch("[^\r\n]+") do
                     -- Lines starting with - are comments.
                     local owned, target = line:match("^%s*([^=%-][^=]-)%s*=%s*(.-)%s*$")
-                    if owned and target and target ~= "" then table.insert(list, {owned, target}) end
+                    if owned and target and target ~= "" and not seen[owned] then
+                        seen[owned] = true
+                        list[#list + 1] = {owned, target}
+                    end
                 end
                 break
             end
