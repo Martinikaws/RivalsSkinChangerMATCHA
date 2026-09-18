@@ -1064,6 +1064,12 @@ local skinDataPairs = {}
 -- skins, skin swaps and wraps in one rivals_config.lua; rivals_wraps.lua is
 -- still read after it for configs saved by the older site.
 local configWrapPairs = {}
+-- The config's [Skybox] section: Preset=<name>, All=<id>, or a face at a time
+-- (Bk, Dn, Ft, Lf, Rt, Up).
+local configSkybox = {}
+-- The config's [Lighting] section: Preset=dark, or Brightness/Exposure/Ambient/
+-- Outdoor/Diffuse/Specular one at a time.
+local configLighting = {}
 
 local function swapTwoWay(instA, instB, parentFolder)
     if not ENABLE_MODEL_SWAPS then return false end
@@ -1801,14 +1807,22 @@ end
 -- so memory past the array's end can't shadow a real key; a start with no
 -- readable key in 64 nodes isn't a node array.
 local function walkNodes(base, maxNodes, wanted)
-    local found, n, readable = {}, 0, 0
+    local found, n, readable, want = {}, 0, 0, 0
+    for _ in pairs(wanted) do want = want + 1 end
     for i = 0, maxNodes - 1 do
         local node = base + i * NODE_SIZE
         local k = nodeKey(node)
         if k then
             readable = readable + 1
-            if wanted[k] and not found[k] then found[k], n = node, n + 1 end
+            -- A removed key stays in its node with a nil value (type tag 0 at
+            -- +12) - a dead key. Rivals re-adds some entries (Molotov, Jump Pad),
+            -- so the dead node can come before the live one; skip it.
+            if wanted[k] and not found[k] then
+                local okT, tt = pcall(mrd, "int", node + 12)
+                if okT and tt ~= 0 then found[k], n = node, n + 1 end
+            end
         end
+        if n == want then break end
         if i == 63 and readable == 0 then break end
     end
     return found, n
@@ -1842,7 +1856,11 @@ local function walkAround(center, span, wanted)
     local found, n = {}, 0
     local function visit(node)
         local k = nodeKey(node)
-        if k and wanted[k] and not found[k] then found[k], n = node, n + 1 end
+        if k and wanted[k] and not found[k] then
+            -- Dead keys (nil value, tag 0) are skipped, as in walkNodes.
+            local okT, tt = pcall(mrd, "int", node + 12)
+            if okT and tt ~= 0 then found[k], n = node, n + 1 end
+        end
     end
     visit(center)
     for i = 1, span do
@@ -1853,11 +1871,89 @@ local function walkAround(center, span, wanted)
 end
 
 -- A node inside ItemLibrary.ViewModels and one inside CosmeticLibrary.Cosmetics.
+-- The registry route: finds a module's table in about 2 ms instead of a heap
+-- scan. Roblox keeps every required module's result in the Lua registry, and
+-- the ModuleScript instance - found by name, instantly - remembers both the
+-- VM's main thread (+0x168) and its registry slot (+0x188, an int). The main
+-- thread is allocated together with the VM's global state, which it points at
+-- from +0x48; the global state holds the registry at +0x618. Tables here keep
+-- their node array at +0x20 and array part at +0x28, 16-byte slots. Every step
+-- is checked by the object's type tag (table 7, thread 10 in this build), and
+-- anything unexpected - a Roblox update moving these offsets - returns nil so
+-- the caller falls back to the scan. Found live 2026-09-18; it landed on the
+-- exact table the scan finds.
+local ROUTE = {thread = 0x168, slot = 0x188, globalState = 0x48, registry = 0x618, node = 0x20, array = 0x28}
+local TAG_TABLE, TAG_THREAD = 7, 10
+
+local function rbyte(a) local ok, v = pcall(mrd, "byte", a) return ok and v or nil end
+local function rint(a) local ok, v = pcall(mrd, "int", a) return ok and v or nil end
+
+local function moduleTable(ms)
+    if not ms or not ms.Address then return nil end
+    local thread = rd(ms.Address + ROUTE.thread)
+    if not thread or thread < 0x10000 or rbyte(thread) ~= TAG_THREAD then return nil end
+    local g = rd(thread + ROUTE.globalState)
+    local reg = g and g > 0x10000 and rd(g + ROUTE.registry)
+    if not reg or reg < 0x10000 or rbyte(reg) ~= TAG_TABLE or rint(g + ROUTE.registry + 12) ~= TAG_TABLE then return nil end
+    local slot, size, arr = rint(ms.Address + ROUTE.slot), rint(reg + 8), rd(reg + ROUTE.array)
+    if not slot or not size or not arr or slot < 1 or slot > size then return nil end
+    local t = rd(arr + (slot - 1) * 16)
+    if not t or t < 0x10000 or rbyte(t) ~= TAG_TABLE then return nil end
+    return t
+end
+
+-- The node array of a table whose layout is known, and the wanted keys in it.
+-- Not tableFields: that guesses which header pointer is the node array, and a
+-- dictionary's other pointers (its metatable, its array part) can lead to a
+-- different table holding the same name - it picked a foreign "Assault Rifle"
+-- in one server and every lookup after it came back empty.
+local function nodesOf(t, maxNodes, wanted)
+    local base = t and t > 0x10000 and rbyte(t) == TAG_TABLE and rd(t + ROUTE.node)
+    if not base or base < 0x10000 then return nil end
+    local found, n = walkNodes(base, maxNodes, wanted)
+    return found, n, base
+end
+
+-- ViewModels / Cosmetics via the registry: an anchor node inside each (the
+-- same thing the scan returns) and the start of its node array, so lookups
+-- can walk the real array only. The module tables are recognised by their
+-- keys, as the scan's fallback does, so a wrong slot is never mistaken for one.
+local function dictionariesViaRegistry(wantVm, wantCos)
+    local mods = game:GetService("ReplicatedStorage"):FindFirstChild("Modules")
+    local vm, cos, vmBase, cosBase
+    if wantVm then
+        local f = nodesOf(moduleTable(mods and mods:FindFirstChild("ItemLibrary")), 256, {ViewModels = true, ViewModelOrder = true})
+        local dict = f and f.ViewModels and f.ViewModelOrder and rd(f.ViewModels)
+        local d, _, base = nodesOf(dict, 8192, VM_ANCHOR)
+        if d and d["Assault Rifle"] then vm, vmBase = d["Assault Rifle"], base end
+    end
+    if wantCos then
+        local f = nodesOf(moduleTable(mods and mods:FindFirstChild("CosmeticLibrary")), 256, {Cosmetics = true})
+        local dict = f and f.Cosmetics and rd(f.Cosmetics)
+        local d, _, base = nodesOf(dict, 16384, COS_ANCHOR)
+        if d and d["Glass"] then cos, cosBase = d["Glass"], base end
+    end
+    return vm, cos, vmBase, cosBase
+end
+
 local function findDictionaries(cache, needVm, needCos)
     local vm, cos = nil, nil
     if needVm and cache.vm and select(2, walkAround(cache.vm, 2048, VM_ANCHOR)) > 0 then vm = cache.vm end
     if needCos and cache.cos and select(2, walkAround(cache.cos, 4096, COS_ANCHOR)) > 0 then cos = cache.cos end
     if (vm or not needVm) and (cos or not needCos) then return vm, cos end
+
+    local okR, rvm, rcos, rvmBase, rcosBase = pcall(dictionariesViaRegistry, needVm and not vm, needCos and not cos)
+    if okR then
+        if rvm then vm, cache.vmBase = rvm, rvmBase end
+        if rcos then cos, cache.cosBase = rcos, rcosBase end
+    end
+    if (vm or not needVm) and (cos or not needCos) then
+        cache.vm, cache.cos = vm or cache.vm, cos or cache.cos
+        cache.route = "registry"
+        return vm, cos
+    end
+    -- The scan only knows a node somewhere inside each dictionary.
+    cache.route, cache.vmBase, cache.cosBase = "scan", nil, nil
 
     local job = game.JobId
     local okG, rows = pcall(getgc, {SCAN_KEY})
@@ -1906,8 +2002,11 @@ local function syncSkinData(pairList, wrapPairs, cache)
     local vmWanted, cosWanted = {}, {}
     for _, p in ipairs(pairList) do vmWanted[p[1]], vmWanted[p[2]] = true, true end
     for _, p in ipairs(wrapPairs) do cosWanted[p[1]], cosWanted[p[2]] = true, true end
-    local vmNodes = vm and (walkAround(vm, 2048, vmWanted)) or {}
-    local cosNodes = cos and (walkAround(cos, 4096, cosWanted)) or {}
+    -- From the start of the real node array when the registry route found it
+    -- (first match wins, so every real key is met before anything past its
+    -- end); otherwise outward from the scan's node, nearest first.
+    local vmNodes = vm and (cache.vmBase and walkNodes(cache.vmBase, 8192, vmWanted) or walkAround(vm, 2048, vmWanted)) or {}
+    local cosNodes = cos and (cache.cosBase and walkNodes(cache.cosBase, 16384, cosWanted) or walkAround(cos, 4096, cosWanted)) or {}
 
     -- Animations, RootPartOffset, Image, ImageHighResolution slots (false when absent).
     local function viewModelSlots(name)
@@ -2045,10 +2144,18 @@ local function applySkinSwapper()
     for _, rawLine in ipairs(r2:split(string.char(10))) do
         local header = rawLine:gsub(string.char(13), ""):match("^%s*%[%s*(.-)%s*%]%s*$")
         if header then
-            section = header:lower():find("wrap") and "wraps" or "skins"
+            local h = header:lower()
+            section = h:find("wrap") and "wraps" or (h:find("sky") and "skybox"
+                or (h:find("light") and "lighting" or "skins"))
         elseif section == "wraps" then
             local owned, target = parseConfigLine(rawLine)
             if owned and target then configWrapPairs[#configWrapPairs + 1] = {owned, target} end
+        elseif section == "skybox" then
+            local key, value = parseConfigLine(rawLine)
+            if key and value then configSkybox[key:lower()] = value end
+        elseif section == "lighting" then
+            local key, value = parseConfigLine(rawLine)
+            if key and value then configLighting[key:lower()] = value end
         else
             local weaponName, skinTarget = parseConfigLine(rawLine)
             if weaponName and skinTarget then
@@ -2500,9 +2607,279 @@ local function readWrapPairs()
     return list
 end
 
+-- Skybox
+--
+-- The sky in Lighting is built by the game's LightingController from a Sky
+-- template in PlayerScripts.(Assets|Modules).LightingProfiles - one profile per
+-- map - and thrown away whenever the area changes. Overwriting the live one
+-- does nothing: the engine loads a face's texture when the property is set and
+-- caches it, and a raw write skips the setter (confirmed in game - the sky
+-- doesn't change, not even with the DebugSkyGray flag toggled). So the changer
+-- rewrites the templates instead, in place, and the game applies them itself
+-- the next time it loads an area (joining a match, a round's map change,
+-- entering or leaving the shooting range). Then the engine does load them,
+-- because the game sets the properties the normal way.
+--
+-- Face ids of the skies the game ships with, Bk Dn Ft Lf Rt Up.
+local SKYBOX_PRESETS = {
+    ["blue"] = {"14147881792", "14147882149", "14147882761", "14147883091", "14147882405", "14147881297"},
+    ["station"] = {"2108482005", "2108545280", "2108482231", "2108482395", "2108482542", "2108482676"},
+    ["graveyard"] = {"135908632589654", "103020541883227", "135908632589654", "135908632589654", "135908632589654", "72960281658487"},
+    ["sudden death"] = {"84214501374682", "89972436184102", "84214501374682", "84214501374682", "84214501374682", "92138082970751"},
+    ["space"] = {"10196550937", "10196550667", "10196550367", "10196550128", "10196549902", "10196567794"},
+    ["westown"] = {"12261809766", "12261813110", "12261809766", "12261809766", "12261809766", "12261813678"},
+    ["black"] = {"91612392386438", "91612392386438", "91612392386438", "91612392386438", "91612392386438", "91612392386438"},
+    -- Roblox's own classic sky, shipped inside the client: no upload and no
+    -- download, it just works.
+    ["classic"] = {"rbxasset://sky/sky512_bk.tex", "rbxasset://sky/sky512_dn.tex", "rbxasset://sky/sky512_ft.tex",
+                   "rbxasset://sky/sky512_lf.tex", "rbxasset://sky/sky512_rt.tex", "rbxasset://sky/sky512_up.tex"}
+}
+local SKYBOX_FACES = {{"bk", 0xf8}, {"dn", 0x128}, {"ft", 0x158}, {"lf", 0x188}, {"rt", 0x1b8}, {"up", 0x1e8}}
+
+local function skyboxAssetId(v)
+    v = tostring(v):match("^%s*(.-)%s*$")
+    if v:find("://") then return v end
+    local digits = v:match("^(%d+)$")
+    return digits and ("rbxassetid://" .. digits) or nil
+end
+
+-- A Roblox string in place: the buffer can't grow, so a face is left alone when
+-- the new id is longer than what the game allocated (ids run to 28 characters
+-- against a capacity of 31, so this is headroom, not a limit in practice).
+local function writeRobloxString(base, str)
+    local ptr, cap = rd(base), mrd("uint64_t", base + 24)
+    if not ptr or not cap or ptr < 0x10000 or #str > cap then return false end
+    for i = 1, #str do mwr("uint8_t", ptr + i - 1, string.byte(str, i)) end
+    mwr("uint8_t", ptr + #str, 0)
+    mwr("uint64_t", base + 16, #str)
+    return true
+end
+
+local function applySkybox(conf)
+    local ids = {}
+    local preset = conf.preset or conf.skybox or conf.name
+    if preset then
+        local p = SKYBOX_PRESETS[tostring(preset):lower()]
+        if not p then return 0, "unknown skybox preset '" .. tostring(preset) .. "'" end
+        for i, v in ipairs(p) do ids[i] = skyboxAssetId(v) end
+    end
+    local all = conf.all and skyboxAssetId(conf.all)
+    if all then for i = 1, 6 do ids[i] = all end end
+    for i, f in ipairs(SKYBOX_FACES) do
+        local one = conf[f[1]] and skyboxAssetId(conf[f[1]])
+        if one then ids[i] = one end
+    end
+    -- A face left out keeps the map's own texture, so a config can change just
+    -- the top, or all six.
+    local given = 0
+    for i = 1, 6 do if ids[i] then given = given + 1 end end
+    if given == 0 then return 0, nil end
+
+    -- Every template the game could apply, plus the live sky so anything reading
+    -- it sees the same thing. StarterPlayerScripts keeps its own copy of the
+    -- profiles. The folders are named, so this normally touches a few dozen
+    -- instances instead of walking the tree.
+    local skies, seen = {}, {}
+    local function add(inst)
+        if inst and inst.ClassName == "Sky" and inst.Address and not seen[inst.Address] then
+            seen[inst.Address] = true
+            skies[#skies + 1] = inst
+        end
+    end
+    local roots = {}
+    local playerScripts = LP:FindFirstChild("PlayerScripts")
+    local starterScripts = game:GetService("StarterPlayer"):FindFirstChild("StarterPlayerScripts")
+    -- Never ipairs a list that can hold a nil: it stops at the hole and the
+    -- whole thing silently finds nothing.
+    if playerScripts then roots[#roots + 1] = playerScripts end
+    if starterScripts then roots[#roots + 1] = starterScripts end
+    for _, root in ipairs(roots) do
+        for _, sub in ipairs({"Assets", "Modules"}) do
+            local folder = root:FindFirstChild(sub)
+            local profiles = folder and folder:FindFirstChild("LightingProfiles")
+            for _, prof in ipairs(profiles and profiles:GetChildren() or {}) do
+                for _, c in ipairs(prof:GetChildren()) do add(c) end
+            end
+        end
+    end
+    -- PlayerScripts is the copy the game actually runs from, and Matcha
+    -- sometimes can't reach it by name at all - FindFirstChild, the property and
+    -- WaitForChild all come back nil while GetDescendants still walks it. Pay
+    -- for the slow walk only in that case, and take only the profile skies:
+    -- every other Sky under the player is the backdrop of a cosmetic or emote
+    -- preview in the menus.
+    if not playerScripts then
+        for _, d in ipairs(LP:GetDescendants()) do
+            local profiles = d.Parent and d.Parent.Parent
+            if profiles and profiles.Name == "LightingProfiles" then add(d) end
+        end
+    end
+    for _, c in ipairs(game:GetService("Lighting"):GetChildren()) do add(c) end
+
+    local patched, skipped = 0, 0
+    for _, d in ipairs(skies) do
+        local ok = 0
+        for i, f in ipairs(SKYBOX_FACES) do
+            if ids[i] and writeRobloxString(d.Address + f[2], ids[i]) then ok = ok + 1 end
+        end
+        if ok == given then patched = patched + 1 else skipped = skipped + 1 end
+    end
+    if patched == 0 then return 0, "no sky templates found" end
+    return patched, (skipped > 0) and (skipped .. " sky templates were left alone (id too long for the game's buffer)") or nil
+end
+
+-- Lighting
+--
+-- Unlike the sky, Lighting's own numbers are read live: writing Brightness or
+-- ExposureCompensation into the Lighting instance darkens the game on the spot.
+-- They don't stick, though - the game's LightingController re-applies a profile
+-- on every area change and puts its own numbers back. Each profile is a Lua
+-- table holding Brightness, ExposureCompensation, Ambient, OutdoorAmbient and
+-- the rest, so the tables are patched as well and the game then applies the
+-- dark values itself. Colors in those tables are Color3 userdata: three floats
+-- at +16, +20, +24.
+local LIGHTING_FIELDS = {
+    brightness = {off = 0x118, key = "Brightness"},
+    exposure = {off = 0x124, key = "ExposureCompensation"},
+    diffuse = {off = 0x11c, key = "EnvironmentDiffuseScale"},
+    specular = {off = 0x120, key = "EnvironmentSpecularScale"},
+    shadowsoftness = {off = nil, key = "ShadowSoftness"},
+    ambient = {off = 0xd0, key = "Ambient", color = true},
+    outdoor = {off = 0x100, key = "OutdoorAmbient", color = true},
+    fogcolor = {off = 0xf4, key = "FogColor", color = true}
+}
+local LIGHTING_PRESETS = {
+    ["dark"] = {brightness = 0.35, exposure = -1.3, diffuse = 0.15, specular = 0.2, ambient = 0.02, outdoor = 0.03, fogcolor = 0.02}
+}
+local COLOR3_FLOATS = 16
+
+-- A grey level (0.02), a percentage-free number, or #rrggbb.
+local function lightingColor(v)
+    local hex = tostring(v):match("^#?(%x%x%x%x%x%x)$")
+    if hex then
+        return tonumber(hex:sub(1, 2), 16) / 255, tonumber(hex:sub(3, 4), 16) / 255, tonumber(hex:sub(5, 6), 16) / 255
+    end
+    local n = tonumber(v)
+    if n then return n, n, n end
+end
+
+local function applyLighting(conf, cache)
+    local values = {}
+    local preset = conf.preset and LIGHTING_PRESETS[tostring(conf.preset):lower()]
+    if conf.preset and not preset then return 0, "unknown lighting preset '" .. tostring(conf.preset) .. "'" end
+    for k, v in pairs(preset or {}) do values[k] = v end
+    for k in pairs(LIGHTING_FIELDS) do
+        if conf[k] then values[k] = conf[k] end
+    end
+    if not next(values) then return 0, nil end
+
+    -- The live Lighting instance: this is what shows immediately.
+    local L = game:GetService("Lighting")
+    local applied = 0
+    for name, raw in pairs(values) do
+        local field = LIGHTING_FIELDS[name]
+        if field and field.off then
+            if field.color then
+                local r, g, b = lightingColor(raw)
+                if r then
+                    mwr("float", L.Address + field.off, r)
+                    mwr("float", L.Address + field.off + 4, g)
+                    mwr("float", L.Address + field.off + 8, b)
+                    applied = applied + 1
+                end
+            else
+                local n = tonumber(raw)
+                if n then
+                    mwr("float", L.Address + field.off, n)
+                    applied = applied + 1
+                end
+            end
+        end
+    end
+
+    -- The profile tables, so an area change doesn't undo it. A node keyed
+    -- ExposureCompensation with Brightness right after it is a profile.
+    local nodes = {}
+    for _, addr in ipairs(cache.lightNodes or {}) do
+        if nodeKey(addr) == "ExposureCompensation" and nodeKey(addr + NODE_SIZE) == "Brightness" then
+            nodes[#nodes + 1] = addr
+        end
+    end
+    -- Each profile is a ModuleScript under Modules.LightingProfiles returning a
+    -- table whose LightingProperties holds these numbers, so the registry route
+    -- reaches them in milliseconds. Profiles load lazily: only the maps visited
+    -- in this server have a table yet, which is also all the scan could find.
+    if #nodes == 0 then
+        local lpFolders = {}
+        local ps = LP:FindFirstChild("PlayerScripts")
+        local folder = ps and ps:FindFirstChild("Modules") and ps.Modules:FindFirstChild("LightingProfiles")
+        if folder then
+            lpFolders[1] = folder
+        else
+            for _, d in ipairs(LP:GetDescendants()) do
+                if d.Name == "LightingProfiles" and d.Parent and d.Parent.Name == "Modules" then lpFolders[1] = d break end
+            end
+        end
+        for _, prof in ipairs(lpFolders[1] and lpFolders[1]:GetChildren() or {}) do
+            if prof.ClassName == "ModuleScript" then
+                local okT, t = pcall(moduleTable, prof)
+                local f = okT and t and nodesOf(t, 64, {LightingProperties = true})
+                local props = f and f.LightingProperties and rd(f.LightingProperties)
+                local pf = props and nodesOf(props, 64, {ExposureCompensation = true, Brightness = true})
+                if pf and pf.ExposureCompensation and pf.Brightness then nodes[#nodes + 1] = pf.ExposureCompensation end
+            end
+        end
+        if #nodes > 0 then cache.lightNodes = nodes end
+    end
+    if #nodes == 0 then
+        local okG, rows = pcall(getgc, {"ExposureCompensation"})
+        for _, r in ipairs(okG and type(rows) == "table" and rows or {}) do
+            if r.addr and nodeKey(r.addr) == "ExposureCompensation" and nodeKey(r.addr + NODE_SIZE) == "Brightness" then
+                nodes[#nodes + 1] = r.addr
+            end
+        end
+        cache.lightNodes = nodes
+    end
+
+    local profiles = 0
+    for _, exposureNode in ipairs(nodes) do
+        -- Walk the profile's own nodes: they sit within a few slots of each other.
+        local wrote = false
+        for i = -12, 12 do
+            local node = exposureNode + i * NODE_SIZE
+            local key = nodeKey(node)
+            if key then
+                for name, field in pairs(LIGHTING_FIELDS) do
+                    if field.key == key and values[name] then
+                        if field.color then
+                            local ud = rd(node)
+                            local r, g, b = lightingColor(values[name])
+                            if ud and ud > 0x10000 and r then
+                                mwr("float", ud + COLOR3_FLOATS, r)
+                                mwr("float", ud + COLOR3_FLOATS + 4, g)
+                                mwr("float", ud + COLOR3_FLOATS + 8, b)
+                                wrote = true
+                            end
+                        else
+                            local n = tonumber(values[name])
+                            if n then
+                                mwr("double", node, n)
+                                wrote = true
+                            end
+                        end
+                    end
+                end
+            end
+        end
+        if wrote then profiles = profiles + 1 end
+    end
+    return applied, (profiles > 0) and ("kept across map changes on " .. profiles .. " lighting profiles")
+        or "applied to the current area only (lighting profiles not found)"
+end
+
 local wrapPairs = readWrapPairs()
 if ENABLE_SKIN_DATA_SYNC and (#skinDataPairs > 0 or #wrapPairs > 0) then
-    print("[RivalsSkinChanger] Applying skin animations, offsets, icons" .. (#wrapPairs > 0 and " + wraps" or "") .. " (memory scan, about 25s; a re-run in this server skips it)...")
+    print("[RivalsSkinChanger] Applying skin animations, offsets, icons" .. (#wrapPairs > 0 and " + wraps" or "") .. "...")
     local tSync = tick()
     local okS, synced, note, wrapsApplied, wrapsMissed = pcall(syncSkinData, skinDataPairs, wrapPairs, dictCache)
     if okS then
@@ -2511,13 +2888,38 @@ if ENABLE_SKIN_DATA_SYNC and (#skinDataPairs > 0 or #wrapPairs > 0) then
         if #wrapPairs > 0 then parts[#parts + 1] = "Wraps applied: " .. tostring(wrapsApplied or 0) .. "/" .. #wrapPairs end
         local msg = table.concat(parts, " | ")
         local wrapNote = (wrapsMissed and #wrapsMissed > 0) and (" (wraps not found: " .. table.concat(wrapsMissed, ", ") .. ")") or ""
-        print("[RivalsSkinChanger] " .. msg .. (note and (" (" .. note .. ")") or "") .. wrapNote .. string.format(" in %.1fs", tick() - tSync))
+        print("[RivalsSkinChanger] " .. msg .. (note and (" (" .. note .. ")") or "") .. wrapNote .. string.format(" in %.1fs", tick() - tSync)
+            .. (dictCache.route == "scan" and " (registry route failed - used the slow memory scan)" or ""))
         notifyUser("Rivals Skin Changer", msg, 6)
     else
         print("[RivalsSkinChanger] Skin animation sync error: " .. tostring(synced))
         notifyUser("Rivals Skin Changer", "Animation sync failed - skins are still swapped", 6)
     end
 end
+do
+    local okSky, patched, skyNote = pcall(applySkybox, configSkybox)
+    if okSky and (patched or 0) > 0 then
+        local msg = "Skybox set on " .. tostring(patched) .. " map profiles - it shows on the next map or area load"
+        print("[RivalsSkinChanger] " .. msg .. (skyNote and (" (" .. skyNote .. ")") or ""))
+        notifyUser("Rivals Skin Changer", msg, 6)
+    elseif okSky and skyNote then
+        print("[RivalsSkinChanger] Skybox: " .. tostring(skyNote))
+    elseif not okSky then
+        print("[RivalsSkinChanger] Skybox error: " .. tostring(patched))
+    end
+end
+
+do
+    local okL, applied, lightNote = pcall(applyLighting, configLighting, dictCache)
+    if okL and (applied or 0) > 0 then
+        print("[RivalsSkinChanger] Lighting: " .. tostring(applied) .. " settings" .. (lightNote and (" - " .. lightNote) or ""))
+    elseif okL and lightNote then
+        print("[RivalsSkinChanger] Lighting: " .. tostring(lightNote))
+    elseif not okL then
+        print("[RivalsSkinChanger] Lighting error: " .. tostring(applied))
+    end
+end
+
 _G.__RIVALS_SKIN_CHANGER_STATE = {restores = memoryRestores, wfAddr = wf.Address, nameCopies = nameCopies, dicts = dictCache}
 
 -- No teardown hooks: Matcha doesn't support BindToClose, OnTeleport,
