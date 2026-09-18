@@ -34,10 +34,20 @@ _G.__RIVALS_SKIN_CHANGER_RESTORE = nil
 _G.__RIVALS_SKIN_CHANGER_ACTIVE = nil
 
 if typeof(notify) == "function" then pcall(notify, "Starting - applying your skins...", "Rivals Skin Changer", 5) end
-local A = LP:WaitForChild("PlayerScripts", 5):WaitForChild("Assets", 5)
-local vm = A and A:WaitForChild("ViewModels", 5)
-local wf = vm and vm:WaitForChild("Weapons", 5)
-local mi = A and A:WaitForChild("Misc", 5)
+-- Generous waits: from autoexec the script starts the moment the player joins,
+-- long before the assets have streamed in. Matcha can also fail to reach
+-- PlayerScripts by name while GetDescendants still walks it, so that case
+-- looks the folder up by its parent's name instead.
+local psRoot = LP:WaitForChild("PlayerScripts", 30)
+local A = psRoot and psRoot:WaitForChild("Assets", 30)
+if not A then
+    for _, d in ipairs(LP:GetDescendants()) do
+        if d.Name == "Assets" and d.Parent and d.Parent.Name == "PlayerScripts" then A = d break end
+    end
+end
+local vm = A and A:WaitForChild("ViewModels", 30)
+local wf = vm and vm:WaitForChild("Weapons", 30)
+local mi = A and A:WaitForChild("Misc", 10)
 local tf = A and A:FindFirstChild("Throwables")
 local pf = A and A:FindFirstChild("Projectiles")
 
@@ -83,6 +93,26 @@ local OFF = {
     Children = 120,
     Transparency = 304
 }
+
+-- One run at a time. The previous run's swaps are undone from the state it
+-- saves when it finishes, so a second run started while the first is still
+-- going (waiting on models that haven't streamed in) can't see them: both swap
+-- the same models back and forth and the undo records are lost - it left
+-- "Arch Uzi" in two slots of its folder, "Uzi" nowhere, and three owned skins
+-- missing, the one-instance-in-two-slots state that crashed teleports before.
+-- The lock expires on its own in case a run dies mid-way.
+local RUN_LOCK_SECONDS = 180
+do
+    local busy = _G.__RIVALS_SKIN_CHANGER_BUSY
+    if type(busy) == "number" and tick() - busy < RUN_LOCK_SECONDS then
+        print("[RivalsSkinChanger] Already running - wait for it to finish, then run it again if needed")
+        if typeof(notify) == "function" then
+            pcall(notify, "Already running - wait for it to finish", "Rivals Skin Changer", 5)
+        end
+        return
+    end
+    _G.__RIVALS_SKIN_CHANGER_BUSY = tick()
+end
 
 -- Undo the previous run's swaps in this place before swapping again, from
 -- plain data that run left in _G.
@@ -1938,11 +1968,22 @@ end
 
 local function findDictionaries(cache, needVm, needCos)
     local vm, cos = nil, nil
-    if needVm and cache.vm and select(2, walkAround(cache.vm, 2048, VM_ANCHOR)) > 0 then vm = cache.vm end
-    if needCos and cache.cos and select(2, walkAround(cache.cos, 4096, COS_ANCHOR)) > 0 then cos = cache.cos end
-    if (vm or not needVm) and (cos or not needCos) then return vm, cos end
+    -- cache.forceScan: a retry after a short sync goes straight to the heap scan,
+    -- a method independent of both the cache and the registry route.
+    local forceScan = cache.forceScan
+    if not forceScan then
+        if needVm and cache.vm and select(2, walkAround(cache.vm, 2048, VM_ANCHOR)) > 0 then vm = cache.vm end
+        if needCos and cache.cos and select(2, walkAround(cache.cos, 4096, COS_ANCHOR)) > 0 then cos = cache.cos end
+        if (vm or not needVm) and (cos or not needCos) then
+            cache.route = "cache"
+            return vm, cos
+        end
+    end
 
-    local okR, rvm, rcos, rvmBase, rcosBase = pcall(dictionariesViaRegistry, needVm and not vm, needCos and not cos)
+    local okR, rvm, rcos, rvmBase, rcosBase = false, nil, nil, nil, nil
+    if not forceScan then
+        okR, rvm, rcos, rvmBase, rcosBase = pcall(dictionariesViaRegistry, needVm and not vm, needCos and not cos)
+    end
     if okR then
         if rvm then vm, cache.vmBase = rvm, rvmBase end
         if rcos then cos, cache.cosBase = rcos, rcosBase end
@@ -2055,7 +2096,7 @@ local function syncSkinData(pairList, wrapPairs, cache)
         end
     end
     local note = (#missed > 0) and ("not found: " .. table.concat(missed, ", ")) or err
-    return synced, note, wrapsApplied, wrapsMissed
+    return synced, note, wrapsApplied, wrapsMissed, missed
 end
 
 local function applySkinSwapper()
@@ -2364,6 +2405,12 @@ local function applySkinSwapper()
         end
     end
 
+    if #missingBaseWeapons > 0 then
+        print("[RivalsSkinChanger] Not swapped - model not found for: " .. table.concat(missingBaseWeapons, ", "))
+    end
+    if #missingSkinModels > 0 then
+        print("[RivalsSkinChanger] Not swapped - skin model not found: " .. table.concat(missingSkinModels, ", "))
+    end
     if #skippedConflicts > 0 then
         print("[RivalsSkinChanger] Skipped (skin already used by another line): " .. table.concat(skippedConflicts, ", "))
     end
@@ -2379,6 +2426,47 @@ local function applySkinSwapper()
 end
 
 -- Run swapper with error detection and reporting
+-- Wait for the game to finish loading. Autoexec starts the script as soon as
+-- the player joins; at that point Rivals hasn't required ItemLibrary yet, so
+-- there are no item tables to find - the lookup comes back empty, the retry
+-- scans for 30s for nothing, and every skin used to end up "not found". A
+-- module that has been required has a registry slot, which moduleTable()
+-- checks. Bounded (60s), and a teleport during the wait ends the run.
+local gameReady = false
+do
+    local mods = game:GetService("ReplicatedStorage"):WaitForChild("Modules", 30)
+    local il = mods and mods:WaitForChild("ItemLibrary", 30)
+    local cl = mods and mods:WaitForChild("CosmeticLibrary", 30)
+    local job, t0, told = game.JobId, tick(), false
+    while tick() - t0 < 60 do
+        local okI, itemTable = pcall(moduleTable, il)
+        if okI and itemTable then
+            -- Wraps live in CosmeticLibrary, usually loaded alongside; give it
+            -- a few more seconds if it lags.
+            for _ = 1, 10 do
+                local okC, cosTable = pcall(moduleTable, cl)
+                if okC and cosTable then break end
+                task.wait(0.5)
+            end
+            gameReady = true
+            break
+        end
+        if not told and tick() - t0 > 2 then
+            told = true
+            print("[RivalsSkinChanger] Waiting for the game to finish loading...")
+        end
+        task.wait(0.5)
+        if game.JobId ~= job then
+            print("[RivalsSkinChanger] Server changed while waiting - stopped")
+            _G.__RIVALS_SKIN_CHANGER_BUSY = nil
+            return
+        end
+    end
+    if not gameReady then
+        print("[RivalsSkinChanger] The game still isn't reporting its item tables after 60s - going ahead anyway")
+    end
+end
+
 local count, errorReason = applySkinSwapper()
 local elapsed = math.floor((tick() - t_start) * 1000)
 
@@ -2881,7 +2969,49 @@ local wrapPairs = readWrapPairs()
 if ENABLE_SKIN_DATA_SYNC and (#skinDataPairs > 0 or #wrapPairs > 0) then
     print("[RivalsSkinChanger] Applying skin animations, offsets, icons" .. (#wrapPairs > 0 and " + wraps" or "") .. "...")
     local tSync = tick()
-    local okS, synced, note, wrapsApplied, wrapsMissed = pcall(syncSkinData, skinDataPairs, wrapPairs, dictCache)
+    local okS, synced, note, wrapsApplied, wrapsMissed, skinsMissed = pcall(syncSkinData, skinDataPairs, wrapPairs, dictCache)
+    local firstRoute = dictCache.route
+
+    -- Short of N/N: look again. Writes are the same values into the same slots,
+    -- so a second pass only fills in what the first one missed. First a fresh
+    -- registry lookup (milliseconds), then the full heap scan (~30s), which
+    -- finds the tables by a different method altogether. Names still missing
+    -- after the scan aren't in the game at all (a typo, a removed skin); they
+    -- are kept in dictCache for this server so a rerun doesn't scan for them.
+    dictCache.knownMissing = dictCache.knownMissing or {}
+    local function unexplained()
+        local n = 0
+        for _, name in ipairs(okS and skinsMissed or {}) do if not dictCache.knownMissing[name] then n = n + 1 end end
+        for _, name in ipairs(okS and wrapsMissed or {}) do if not dictCache.knownMissing[name] then n = n + 1 end end
+        return n
+    end
+    local function retry(label, forceScan)
+        print("[RivalsSkinChanger] " .. tostring((synced or 0)) .. "/" .. #skinDataPairs .. " skins, "
+            .. tostring(wrapsApplied or 0) .. "/" .. #wrapPairs .. " wraps - retrying with " .. label .. "...")
+        dictCache.vm, dictCache.cos, dictCache.vmBase, dictCache.cosBase = nil, nil, nil, nil
+        dictCache.forceScan = forceScan
+        local ok2, s2, n2, w2, wm2, sm2 = pcall(syncSkinData, skinDataPairs, wrapPairs, dictCache)
+        dictCache.forceScan = nil
+        -- Keep whichever pass got further; earlier writes stay applied either way.
+        if ok2 and ((s2 or 0) + (w2 or 0)) >= ((synced or 0) + (wrapsApplied or 0)) then
+            okS, synced, note, wrapsApplied, wrapsMissed, skinsMissed = ok2, s2, n2, w2, wm2, sm2
+        end
+    end
+    if okS and unexplained() > 0 then retry("a fresh lookup", false) end
+    if okS and unexplained() > 0 then
+        notifyUser("Rivals Skin Changer", "Some skins didn't load - double-checking with a full memory scan (~30s)...", 6)
+        retry("a full memory scan (~30s)", true)
+        if gameReady then
+            for _, name in ipairs(skinsMissed or {}) do dictCache.knownMissing[name] = true end
+            for _, name in ipairs(wrapsMissed or {}) do dictCache.knownMissing[name] = true end
+        end
+        local gone = {}
+        if skinsMissed and #skinsMissed > 0 then gone[#gone + 1] = "skins: " .. table.concat(skinsMissed, ", ") end
+        if wrapsMissed and #wrapsMissed > 0 then gone[#gone + 1] = "wraps: " .. table.concat(wrapsMissed, ", ") end
+        if #gone > 0 then
+            print("[RivalsSkinChanger] Not in the game's item list (check the names in your config) - " .. table.concat(gone, " | "))
+        end
+    end
     if okS then
         local parts = {}
         if #skinDataPairs > 0 then parts[#parts + 1] = "Animations, offsets + icons applied: " .. tostring(synced) .. "/" .. #skinDataPairs end
@@ -2889,7 +3019,7 @@ if ENABLE_SKIN_DATA_SYNC and (#skinDataPairs > 0 or #wrapPairs > 0) then
         local msg = table.concat(parts, " | ")
         local wrapNote = (wrapsMissed and #wrapsMissed > 0) and (" (wraps not found: " .. table.concat(wrapsMissed, ", ") .. ")") or ""
         print("[RivalsSkinChanger] " .. msg .. (note and (" (" .. note .. ")") or "") .. wrapNote .. string.format(" in %.1fs", tick() - tSync)
-            .. (dictCache.route == "scan" and " (registry route failed - used the slow memory scan)" or ""))
+            .. (firstRoute == "scan" and " (registry route failed - used the slow memory scan)" or ""))
         notifyUser("Rivals Skin Changer", msg, 6)
     else
         print("[RivalsSkinChanger] Skin animation sync error: " .. tostring(synced))
@@ -2921,6 +3051,7 @@ do
 end
 
 _G.__RIVALS_SKIN_CHANGER_STATE = {restores = memoryRestores, wfAddr = wf.Address, nameCopies = nameCopies, dicts = dictCache}
+_G.__RIVALS_SKIN_CHANGER_BUSY = nil
 
 -- No teardown hooks: Matcha doesn't support BindToClose, OnTeleport,
 -- TeleportInit, PlayerRemoving or AncestryChanged (they read as nil).
