@@ -2892,8 +2892,13 @@ local function applyCosmetics()
     end
     for _, p in ipairs(configFinishers) do
         local owned, target = p[1], p[2]
-        local a = finishers and finishers:FindFirstChild(owned)
-        local b = finishers and finishers:FindFirstChild(target)
+        local a, b
+        for _ = 1, 20 do
+            a = finishers and finishers:FindFirstChild(owned)
+            b = finishers and finishers:FindFirstChild(target)
+            if a and b then break end
+            task.wait(0.5)
+        end
         if not a or not b then
             missed[#missed + 1] = owned .. "=" .. target .. " (" .. (not a and owned or target) .. " isn't a finisher)"
         elseif not claim("f:", owned, target) then
@@ -2906,14 +2911,20 @@ local function applyCosmetics()
     end
     for _, p in ipairs(configCharms) do
         local owned, target = p[1], p[2]
-        local a = charmModels and charmModels:FindFirstChild(owned)
-        local b = charmModels and charmModels:FindFirstChild(target)
-        local variant
-        if not b and charmModels then
-            local base, rank = target:match("^(Season %d+)%s+(.+)$")
-            local m = base and charmModels:FindFirstChild(base)
-            local extra = m and m:FindFirstChild("Extra")
-            if extra and extra:FindFirstChild(rank) then b, variant = m, rank end
+        -- Charm models (the unreleased seasons especially) can still be
+        -- streaming in when autoexec starts the script: look again for up to 10s.
+        local a, b, variant
+        for _ = 1, 20 do
+            a = charmModels and charmModels:FindFirstChild(owned)
+            b, variant = charmModels and charmModels:FindFirstChild(target), nil
+            if not b and charmModels then
+                local base, rank = target:match("^(Season %d+)%s+(.+)$")
+                local m = base and charmModels:FindFirstChild(base)
+                local extra = m and m:FindFirstChild("Extra")
+                if extra and extra:FindFirstChild(rank) then b, variant = m, rank end
+            end
+            if a and b then break end
+            task.wait(0.5)
         end
         if not a or not b then
             missed[#missed + 1] = owned .. "=" .. target .. " (" .. (not a and owned or target) .. " isn't a charm)"
