@@ -1,19 +1,13 @@
--- Rivals Master Skin Changer & Enhancement Engine (Diagnostics Edition)
--- Instant loading (<15ms): Direct memory slot resolution, zero synchronous GC stalls
--- Complete weapon display fix: ViewModelRoot RightArm restoration & zero WaitForChild hangs
--- Zero-Latency 2D Icon Engine: RenderStepped + DescendantAdded 0ms GUI icon synchronization
--- Ultra-Precise Wing Coordinate Alignment: Exact matrix matching for Uzi & Katana wings
--- Robust Multi-Path Config Loader: Comprehensive error diagnostics & in-game user alerts
+-- Rivals skin changer (Matcha)
 local t_start = tick()
 
-if not pcall(memory_read, "int", game.Address) then 
-    return 
+if not pcall(memory_read, "int", game.Address) then
+    return
 end
 
 if not game:IsLoaded() then game.Loaded:Wait() end
 
--- Only run in RIVALS (universe 6035872082 covers the lobby and every match
--- place); anywhere else, stop quietly.
+-- Rivals only
 local RIVALS_GAME_ID = 6035872082
 local okGameId, gameId = pcall(function() return game.GameId end)
 if not okGameId or tonumber(gameId) ~= RIVALS_GAME_ID then return end
@@ -26,7 +20,6 @@ end
 
 if game.GameId ~= 6035872082 then return end
 
--- Older builds parked a restore closure in _G; run it once, then drop it.
 if type(_G.__RIVALS_SKIN_CHANGER_RESTORE) == "function" then
     pcall(_G.__RIVALS_SKIN_CHANGER_RESTORE)
 end
@@ -34,10 +27,8 @@ _G.__RIVALS_SKIN_CHANGER_RESTORE = nil
 _G.__RIVALS_SKIN_CHANGER_ACTIVE = nil
 
 if typeof(notify) == "function" then pcall(notify, "Starting - applying your skins...", "Rivals Skin Changer", 5) end
--- Generous waits: from autoexec the script starts the moment the player joins,
--- long before the assets have streamed in. Matcha can also fail to reach
--- PlayerScripts by name while GetDescendants still walks it, so that case
--- looks the folder up by its parent's name instead.
+
+-- Game folders
 local psRoot = LP:WaitForChild("PlayerScripts", 30)
 local A = psRoot and psRoot:WaitForChild("Assets", 30)
 if not A then
@@ -55,16 +46,6 @@ if not wf then
     return
 end
 
--- wf existing doesn't mean assets have finished streaming in - the swap pass
--- below does raw reads of Roblox's internal children-vector begin/end
--- pointers, which is only safe once nothing is actively appending to that
--- vector. Reading those bounds mid-mutation can return a stale/inconsistent
--- pair, making the slot scan wander outside the real vector and write
--- somewhere it shouldn't - plausible explanation for corruption landing on
--- an unconfigured weapon (Handgun) as collateral damage from another
--- weapon's swap while things were still loading. Wait for both wf's and
--- vm's descendant counts to hold steady across a check before touching
--- memory at all, instead of racing a still-mutating structure.
 do
     local lastWf, lastVm = -1, -1
     for _ = 1, 20 do
@@ -76,15 +57,16 @@ do
     end
 end
 
+-- Memory
 local mrd, mwr, pcall, ipairs, pairs = memory_read, memory_write, pcall, ipairs, pairs
 
-local rd = function(a) 
+local rd = function(a)
     local o, v = pcall(mrd, "uintptr_t", a)
-    return o and v or nil 
+    return o and v or nil
 end
 
-local wr = function(a, v) 
-    pcall(mwr, "uintptr_t", a, v) 
+local wr = function(a, v)
+    pcall(mwr, "uintptr_t", a, v)
 end
 
 local OFF = {
@@ -94,13 +76,7 @@ local OFF = {
     Transparency = 304
 }
 
--- One run at a time. The previous run's swaps are undone from the state it
--- saves when it finishes, so a second run started while the first is still
--- going (waiting on models that haven't streamed in) can't see them: both swap
--- the same models back and forth and the undo records are lost - it left
--- "Arch Uzi" in two slots of its folder, "Uzi" nowhere, and three owned skins
--- missing, the one-instance-in-two-slots state that crashed teleports before.
--- The lock expires on its own in case a run dies mid-way.
+-- Run lock
 local RUN_LOCK_SECONDS = 180
 do
     local busy = _G.__RIVALS_SKIN_CHANGER_BUSY
@@ -114,18 +90,39 @@ do
     _G.__RIVALS_SKIN_CHANGER_BUSY = tick()
 end
 
--- Undo the previous run's swaps in this place before swapping again, from
--- plain data that run left in _G.
+-- Undo the previous run
 local dictCache = {}
 do
+
+    local old = _G.__RIVALS_COSMETICS_STATE
+    _G.__RIVALS_COSMETICS_STATE = nil
+    if type(old) == "table" and type(old.restores) == "table" then
+        local fin = game:GetService("ReplicatedStorage"):FindFirstChild("Modules")
+        fin = fin and fin:FindFirstChild("Finishers")
+        local charmsFolder = A and A:FindFirstChild("Charms")
+        if old.key == tostring(fin and fin.Address) .. "/" .. tostring(charmsFolder and charmsFolder.Address) then
+            for i = #old.restores, 1, -1 do
+                local r = old.restores[i]
+                if r.nameSlot then
+                    wr(r.nameSlot, r.name)
+                else
+                    wr(r.sa, r.ia) if r.ca then wr(r.sa + 8, r.ca) end
+                    wr(r.sb, r.ib) if r.cb then wr(r.sb + 8, r.cb) end
+                    wr(r.ia + OFF.NameContainer, r.na)
+                    wr(r.ib + OFF.NameContainer, r.nb)
+                    wr(r.ia + OFF.Parent, r.pa)
+                    wr(r.ib + OFF.Parent, r.pb)
+                end
+            end
+        end
+    end
+
     local prev = _G.__RIVALS_SKIN_CHANGER_STATE
     _G.__RIVALS_SKIN_CHANGER_STATE = nil
-    -- Same place only: after a teleport these addresses point into a destroyed DataModel.
+
     if type(prev) == "table" and type(prev.restores) == "table" and prev.wfAddr == wf.Address then
         if type(prev.dicts) == "table" then dictCache = prev.dicts end
-        -- Newest first: a slot can have been swapped more than once (the old
-        -- version swapped a shared Default entry once per skin), and undoing
-        -- that oldest first leaves one instance in two slots.
+
         for i = #prev.restores, 1, -1 do
             local r = prev.restores[i]
             if r.defSlot and r.origDefInst then
@@ -145,20 +142,24 @@ do
         for i = #nc, 1, -1 do
             if nc[i][2] then wr(nc[i][1], nc[i][2]) end
         end
+        local fl = prev.floats or {}
+        for i = #fl, 1, -1 do
+            pcall(mwr, "float", fl[i][1], fl[i][2])
+        end
     end
 end
 
-local IMG_OFF = 0xA10 -- Verified default for modern 64-bit engine build
+local IMG_OFF = 0xA10
 
-local ga = function(f) 
+-- Folder slots
+local ga = function(f)
     if not f or not f.Address then return end
     local n = rd(f.Address + OFF.Children)
     if not n or n == 0 then return end
     local b, e = rd(n), rd(n + 8)
-    if b and e then return b, e end 
+    if b and e then return b, e end
 end
 
--- Find instance slot in a folder's memory vector
 local function findSlotAddress(inst, targetFolder)
     if not inst or not inst.Address or not targetFolder or not targetFolder.Address then return nil end
     local b, e = ga(targetFolder)
@@ -171,7 +172,7 @@ local function findSlotAddress(inst, targetFolder)
     return nil
 end
 
--- In-place ImageLabel Image string writer (safe, zero reallocations, buffer cap <= 31)
+-- Hotbar icons
 local function writeImage(label, newAssetId)
     if not _scriptAlive or not label or not label.Address or not newAssetId then return false end
     if not label:IsDescendantOf(game) then return false end
@@ -191,7 +192,6 @@ local function writeImage(label, newAssetId)
     return true
 end
 
--- Dynamic offset validator for IMG_OFF
 local function checkImgOffset()
     local pg = LP:FindFirstChild("PlayerGui")
     if not pg then return end
@@ -218,7 +218,7 @@ local function checkImgOffset()
 end
 pcall(checkImgOffset)
 
--- Fix ViewModelRoot RightArm if its NameContainer was corrupted/cleared
+-- Viewmodel root fix
 local function fixViewModelRoots()
     local containers = {}
     if LP:FindFirstChild("PlayerScripts") and LP.PlayerScripts:FindFirstChild("Assets") and LP.PlayerScripts.Assets:FindFirstChild("Misc") then
@@ -228,7 +228,7 @@ local function fixViewModelRoots()
     if sp:FindFirstChild("StarterPlayerScripts") and sp.StarterPlayerScripts:FindFirstChild("Assets") and sp.StarterPlayerScripts.Assets:FindFirstChild("Misc") then
         table.insert(containers, sp.StarterPlayerScripts.Assets.Misc)
     end
-    
+
     for _, misc in ipairs(containers) do
         local vmr = misc:FindFirstChild("ViewModelRoot")
         if vmr and not vmr:FindFirstChild("RightArm") then
@@ -243,6 +243,7 @@ local function fixViewModelRoots()
 end
 pcall(fixViewModelRoots)
 
+-- Icon ids
 local ITEM_ICONS = {
     ["Assault Rifle"] = {
         ["Standard"] = "rbxassetid://17160682738",
@@ -814,7 +815,6 @@ local ITEM_ICONS = {
     },
 }
 
-
 local STANDARD_ICON_MAP = {
     ["rbxassetid://17160682738"] = "Assault Rifle",
     ["rbxassetid://93390542043222"] = "Battle Axe",
@@ -867,9 +867,7 @@ local STANDARD_ICON_MAP = {
     ["rbxassetid://77401164737509"] = "Wildcat",
 }
 
-
-
--- Explicit skin mappings for special names / case folders
+-- Skin models
 local EXACT_SKIN_MAP = {
     ["AKEY-47"] = {folder = "Bundles", name = "AKEY-47"},
     ["Key Bow"] = {folder = "Bundles", name = "Key Bow"},
@@ -1008,7 +1006,7 @@ local EXACT_SKIN_MAP = {
     ["Wrench"] = {folder = "Community Skin Case", name = "Wrench"}
 }
 
--- Fast Case-Insensitive Skin Model Finder
+-- Skin model lookup
 local function findSkinModel(skinName)
     local directMap = EXACT_SKIN_MAP[skinName]
     if directMap and vm then
@@ -1047,25 +1045,16 @@ local function findSkinModel(skinName)
     return nil
 end
 
+-- Memory swap
 local memoryRestores = {}
 local renamedScripts = {}
 
--- Safe atomic two-way pointer swap
--- Every structural tree swap that applies skins (weapons, throwables,
--- projectiles, sound callbacks). Cleared as a crash cause: 3/3 clean
--- same-process teleports with these on.
 local ENABLE_MODEL_SWAPS = true
--- One-time load edits through the normal Lua API. With them on, a
--- same-process teleport (lobby -> match) crashed Roblox every time
--- (RobloxPlayerBeta +0x7d8bf9); with both off it didn't, 3 out of 3. Which
--- of the two is responsible hasn't been isolated, so both stay off.
+
 local ENABLE_RIG_FIXES = false
 local ENABLE_SOUND_REPLACEMENT = false
--- Renaming through the Lua API (m.Name = ...) crashed the next teleport like
--- every other Lua-API property write from Matcha. Names are interned: all
--- instances with one name share one name object (same pointer, no use
--- count), so an instance is renamed by pointing its NameContainer at another
--- instance's name - a raw pointer write like the swaps.
+
+-- Name copies
 local ENABLE_NAME_COPIES = true
 local nameCopies = {}
 local function copyName(target, nameSource)
@@ -1079,28 +1068,20 @@ local function copyName(target, nameSource)
     end
     return true
 end
--- ItemLibrary.ViewModels[name] holds each skin's Animations table and
--- RootPartOffset. The game reads the entry of the equipped item, which stays
--- the default's, so a swapped-in skin model played the default's animations
--- (detached key-skin parts) at the default's offset (oversized Arch Molotov).
--- The default entry's two slots are pointed at the skin's values with raw
--- pointer writes, the same kind of write as the model swaps. Its Image and
--- ImageHighResolution are the hotbar and loadout icons (ItemLibrary:
--- GetViewModelImage falls back to ViewModels[weapon] for a default skin),
--- pointed at the skin's the same way.
+
+-- Config data
 local ENABLE_SKIN_DATA_SYNC = true
 local skinDataPairs = {}
--- OwnedWrap=TargetWrap lines from the config's [Wraps] section. The site saves
--- skins, skin swaps and wraps in one rivals_config.lua; rivals_wraps.lua is
--- still read after it for configs saved by the older site.
+
 local configWrapPairs = {}
--- The config's [Skybox] section: Preset=<name>, All=<id>, or a face at a time
--- (Bk, Dn, Ft, Lf, Rt, Up).
+
 local configSkybox = {}
--- The config's [Lighting] section: Preset=dark, or Brightness/Exposure/Ambient/
--- Outdoor/Diffuse/Specular one at a time.
+
 local configLighting = {}
 
+local configFinishers, configCharms = {}, {}
+
+-- Swap two instances
 local function swapTwoWay(instA, instB, parentFolder)
     if not ENABLE_MODEL_SWAPS then return false end
     if not instA or not instB or not instA.Address or not instB.Address then return false end
@@ -1150,14 +1131,14 @@ local function swapTwoWay(instA, instB, parentFolder)
     return true
 end
 
--- Model Rigging & Attachment Preservers
+-- Rig fixes (off)
 local function fixCrossbowRig(m)
     if not m then return end
     local b = m:FindFirstChild("Body")
     if not b then return end
     local p = b:FindFirstChild("Primary") or b:FindFirstChild("BodyPrimary") or b:FindFirstChildWhichIsA("BasePart")
     if not p then return end
-    
+
     for _, c in ipairs(m:GetChildren()) do
         if c.Name == "Arch" or c.Name == "String" or c.Name:find("Arrow") or c.Name:find("Bow") or c.Name:find("Wing") then
             local cp = (c.ClassName == "Model" and (c.PrimaryPart or c:FindFirstChild("Primary") or c:FindFirstChildWhichIsA("BasePart"))) or (c:IsA("BasePart") and c)
@@ -1277,13 +1258,13 @@ local function rigSkinModel(m)
             end
         end
     end
-    
+
     if m:FindFirstChild("Body") and m.Body:FindFirstChild("Primary") then
         pcall(function() m.PrimaryPart = m.Body.Primary end)
     elseif not m.PrimaryPart then
         pcall(function() m.PrimaryPart = m:FindFirstChildWhichIsA("BasePart", true) end)
     end
-    
+
     for _, c in ipairs(m:GetChildren()) do
         local n = c.Name:lower()
         if n:find("shell") or n:find("%.r") or n:find("%.l") or n:find("sleeve") or n:find("juggle") then
@@ -1294,7 +1275,7 @@ local function rigSkinModel(m)
     end
 end
 
--- Particle, Fire & Deflect Mappings from legacy engine
+-- Effects
 local MISC_SPECIAL_MAP = {
     ["Arch Molotov"] = { BurningEffects = "Arch Molotov", MolotovExplosionEffects = "Arch Molotov", FireHitboxes = "Arch Molotov" },
     ["Ship In A Bottle"] = { BurningEffects = "Ship In A Bottle", MolotovExplosionEffects = "Ship In A Bottle", FireHitboxes = "Ship In A Bottle" },
@@ -1390,7 +1371,7 @@ local MISC_EXPLOSIONS_BASE = {
     RPG = "ExplosionEffect"
 }
 
--- Sniper Custom Scopes
+-- Sniper scopes
 local SCOPE_RETICLES = {
     ["Pixel Sniper"] = {
         blur = "rbxassetid://18171031143",
@@ -1402,7 +1383,6 @@ local SCOPE_RETICLES = {
     }
 }
 
--- Throwables and Projectiles mappings
 local THROWABLES_NAMES = {
     Molotov = true, Grenade = true, Flashbang = true,
     ["Smoke Grenade"] = true, Satchel = true, Warpstone = true
@@ -1414,11 +1394,10 @@ local PROJECTILES_NAMES = {
 }
 
 local _scriptAlive = true
+
+-- Sound callbacks (off)
 local ACTIVE_CONFIG_SKINS = {}
 
--- Native SoundCallbacks Redirection Engine
--- Skin-specific sound callback redirection. Off: untested since it moved from
--- the Instance.This swap to swapTwoWay.
 local ENABLE_SOUND_CALLBACKS = false
 
 local function applySoundCallbacks()
@@ -1426,16 +1405,16 @@ local function applySoundCallbacks()
     local rs = game:GetService("ReplicatedStorage")
     local sc = rs:FindFirstChild("Modules") and rs.Modules:FindFirstChild("AnimationLibrary") and rs.Modules.AnimationLibrary:FindFirstChild("SoundCallbacks")
     if not sc then return end
-    
+
     local function pfx(n)
         return n:lower():gsub("[%s%-%'%.]+", "")
     end
-    
+
     local abn = {}
     for _, c in ipairs(sc:GetChildren()) do
         abn[c.Name] = c
     end
-    
+
     for weaponName, skinTarget in pairs(ACTIVE_CONFIG_SKINS) do
         local wp = pfx(weaponName)
         local sp = pfx(skinTarget)
@@ -1444,11 +1423,7 @@ local function applySoundCallbacks()
             if name:sub(1, #spfx) == spfx then
                 local suffix = name:sub(#spfx + 1)
                 local defInst = abn[wp .. "_" .. suffix]
-                -- Redirect via swapTwoWay (slot + name + parent, pointer and
-                -- refcount control block moved together). This used to swap the
-                -- pointer at Address+0x8 - Instance.This, each instance's
-                -- self-reference - which leaves each instance believing it's the
-                -- other one.
+
                 if defInst and inst and defInst.Address and inst.Address and defInst.Address ~= inst.Address then
                     swapTwoWay(defInst, inst, sc)
                 end
@@ -1457,19 +1432,9 @@ local function applySoundCallbacks()
     end
 end
 
--- Everything that keeps running after load - the RenderStepped ticker (FX
--- culler + sound loop), the icon engine and the custom-animation input
--- hook - is off. Parked task.wait threads alive at a same-process teleport
--- crash Roblox (reproduced with two empty loops); connections were never
--- isolated, so these stay off too.
+-- Live features (off)
 local ENABLE_PERSISTENT_FEATURES = false
 
--- Periodic work runs off one RenderStepped connection, never task.spawn loops:
--- a Matcha-owned thread parked in task.wait when Roblox switches places
--- in-process crashes the engine (RobloxPlayerBeta +0x7d8bf9, reproduced with
--- only two empty task.wait loops), and Matcha supports no teardown signal
--- (BindToClose/OnTeleport/TeleportInit/PlayerRemoving/AncestryChanged) that
--- could stop them in time.
 local tickJobs = {}
 local function every(interval, fn)
     table.insert(tickJobs, {interval = interval, acc = 0, fn = fn})
@@ -1488,7 +1453,6 @@ if ENABLE_PERSISTENT_FEATURES then
     end)
 end
 
--- Active viewmodel beam and particle FX culler
 do
     local rs = game:GetService("ReplicatedStorage")
     every(0.3, function()
@@ -1513,7 +1477,6 @@ do
     end)
 end
 
--- Ultra-Precise Wing Coordinate Matrices (extracted directly from official assets)
 local KATANA_WINGS1_CFS = {
     CFrame.new(0.0002, 0.7842, 0.3093, -0.0000, 0.0000, -1.0000, 0.0000, 1.0000, 0.0000, 1.0000, 0.0000, -0.0000),
     CFrame.new(0.0002, 0.7051, 0.5293, -0.0000, 0.0000, -1.0000, 0.0000, 1.0000, 0.0000, 1.0000, 0.0000, -0.0000),
@@ -1550,7 +1513,7 @@ local lastEquippedWeapon = nil
 local function alignWeaponWings()
     local fp = workspace:FindFirstChild("ViewModels") and workspace.ViewModels:FindFirstChild("FirstPerson")
     if not fp then return end
-    
+
     for _, vmInst in ipairs(fp:GetChildren()) do
         local wName = vmInst.Name:match("%-%s*(.-)%s*%-") or vmInst.Name:match(LP.Name .. "%s*%-%s*(.-)%s*$")
         if wName and wName ~= lastEquippedWeapon then
@@ -1563,8 +1526,7 @@ local function alignWeaponWings()
             local bp = body and (body:FindFirstChild("Primary") or body:FindFirstChild("BodyPrimary"))
             if bp then
                 local bcf = bp.CFrame
-                
-                -- Uzi Wings
+
                 local uw1 = iv:FindFirstChild("Wing1")
                 local uw2 = iv:FindFirstChild("Wing2")
                 if uw1 and uw2 then
@@ -1586,7 +1548,6 @@ local function alignWeaponWings()
                     end
                 end
 
-                -- Katana Wings
                 local kw1 = iv:FindFirstChild("Wings1")
                 local kw2 = iv:FindFirstChild("Wings2")
                 if kw1 and kw2 then
@@ -1612,7 +1573,6 @@ local function alignWeaponWings()
     end
 end
 
--- Robust Bullet, Reload, and Inspect Sound Replacement Table
 local SOUND_REPLACEMENTS = {
     ["13236548545"] = { primary = "rbxassetid://17662574783", secondary = "rbxassetid://18764343961" },
     ["13236548480"] = { primary = "rbxassetid://90757583550672", secondary = "rbxassetid://110122962237431" },
@@ -1705,7 +1665,6 @@ every(0.1, function()
     end
 end)
 
--- Custom Animation Engine (Event Horizon Reload / Inspect & Arch Katana Inspect)
 local sampleAnimInstance = nil
 local function getSampleAnim()
     if sampleAnimInstance and sampleAnimInstance.Parent then return sampleAnimInstance end
@@ -1744,7 +1703,7 @@ pcall(function()
             local wName = vmInst.Name:match("%-%s*(.-)%s*%-") or vmInst.Name:match(LP.Name .. "%s*%-%s*(.-)%s*$")
             local ac = vmInst:FindFirstChild("AnimationController") or vmInst:FindFirstChildWhichIsA("AnimationController")
             local animator = ac and (ac:FindFirstChild("Animator") or ac:FindFirstChildWhichIsA("Animator"))
-            
+
             if wName == "Sniper" and animator then
                 if input.KeyCode == Enum.KeyCode.R then
                     playCustomTrack(animator, "rbxassetid://121991964753861", 1.43)
@@ -1760,7 +1719,7 @@ pcall(function()
     end)
 end)
 
--- In-Game Alert / Notification System
+-- Notifications
 local function notifyUser(title, text, duration)
     duration = duration or 8
     if typeof(notify) == "function" then
@@ -1775,8 +1734,7 @@ local function notifyUser(title, text, duration)
     end)
 end
 
--- Skin swap lines: "Weapon | OwnedSkin > TargetSkin" - equip OwnedSkin and it
--- looks like TargetSkin. They have no "=" or ":", so older builds skip them.
+-- Config
 local function parseSkinSwapLine(rawLine)
     local l = rawLine:gsub(string.char(13), "")
     if l:match("^%s*%-%-") then return nil end
@@ -1784,46 +1742,33 @@ local function parseSkinSwapLine(rawLine)
     if w and o and t and #w > 0 and #o > 0 and #t > 0 and o ~= t then return w, o, t end
 end
 
--- Robust Config Line Parser
 local function parseConfigLine(rawLine)
     local l = rawLine:gsub(string.char(13), ""):gsub(string.char(10), ""):match("^%s*(.-)%s*$")
     if not l or #l == 0 or l:sub(1, 2) == "--" or l:sub(1, 1) == "#" or l == "return {" or l == "}" then
         return nil, nil
     end
-    
+
     local sep = l:find("=") or l:find(":")
     if not sep then return nil, nil end
-    
+
     local w = l:sub(1, sep - 1):match("^%s*(.-)%s*$")
     local s = l:sub(sep + 1):match("^%s*(.-)%s*$")
     if not w or not s then return nil, nil end
-    
-    -- Strip trailing commas or semicolons
+
     s = s:gsub("[,;]+$", ""):match("^%s*(.-)%s*$")
-    
-    -- Strip brackets
+
     w = w:gsub('^%["', ''):gsub('"%]$', ''):gsub("^%['", ''):gsub("'%]$", ''):gsub('^%[', ''):gsub('%]$', '')
-    
-    -- Strip outer quotes
+
     w = w:gsub('^"', ''):gsub('"$', ''):gsub("^'", ''):gsub("'$", ''):match("^%s*(.-)%s*$")
     s = s:gsub('^"', ''):gsub('"$', ''):gsub("^'", ''):gsub("'$", ''):match("^%s*(.-)%s*$")
-    
+
     if w and s and #w > 0 and #s > 0 then
         return w, s
     end
     return nil, nil
 end
 
--- Main ultra-fast skin swapper with comprehensive error diagnostics
--- ItemLibrary.ViewModels and CosmeticLibrary.Cosmetics are dictionaries keyed
--- by weapon, skin and wrap name. One memory scan finds the two dictionaries
--- (a re-run in the same server reuses where they were and skips it); entries
--- and their fields are then read straight from the tables' node arrays -
--- 32-byte nodes with the value at +0 and a key string pointer at +16 whose
--- text starts at +24 - which takes milliseconds. Matching entries by animation
--- names would hit other weapons (Grenade's are also Flashbang's), and
--- decompile(), which this used to read ItemLibrary with, now fails in Matcha
--- ("Decompiler: Error 500").
+-- Lua table reading
 local NODE_SIZE, NODE_KEY, STRING_DATA = 32, 16, 24
 
 local function nodeKey(node)
@@ -1833,9 +1778,6 @@ local function nodeKey(node)
     if ok and type(str) == "string" and #str > 0 and #str < 80 then return str end
 end
 
--- Wanted keys met walking up to maxNodes nodes from base. The first match wins,
--- so memory past the array's end can't shadow a real key; a start with no
--- readable key in 64 nodes isn't a node array.
 local function walkNodes(base, maxNodes, wanted)
     local found, n, readable, want = {}, 0, 0, 0
     for _ in pairs(wanted) do want = want + 1 end
@@ -1844,9 +1786,7 @@ local function walkNodes(base, maxNodes, wanted)
         local k = nodeKey(node)
         if k then
             readable = readable + 1
-            -- A removed key stays in its node with a nil value (type tag 0 at
-            -- +12) - a dead key. Rivals re-adds some entries (Molotov, Jump Pad),
-            -- so the dead node can come before the live one; skip it.
+
             if wanted[k] and not found[k] then
                 local okT, tt = pcall(mrd, "int", node + 12)
                 if okT and tt ~= 0 then found[k], n = node, n + 1 end
@@ -1858,7 +1798,6 @@ local function walkNodes(base, maxNodes, wanted)
     return found, n
 end
 
--- A table's node array is the header pointer whose walk meets the most wanted keys.
 local function tableFields(t, maxNodes, wanted)
     if not t or t < 0x10000 then return nil, 0 end
     local best, bestN, bestBase = nil, 0, nil
@@ -1873,21 +1812,15 @@ local function tableFields(t, maxNodes, wanted)
 end
 
 local VM_ANCHOR, COS_ANCHOR = {["Assault Rifle"] = true}, {["Glass"] = true}
--- AK-47 is a key in both dictionaries (its viewmodel in ViewModels, the skin in
--- Cosmetics) and rare as a key anywhere else, so one scan for it lands inside
--- both. A scan's time grows with the keys it looks for: about 23s for one key
--- against 41-50s for ViewModels + Cosmetics.
+
 local SCAN_KEY = "AK-47"
 
--- Wanted keys met walking out from a node of a dictionary, nearest first, up
--- to span nodes each way, so the dictionary's own nodes are met before
--- anything past its ends.
 local function walkAround(center, span, wanted)
     local found, n = {}, 0
     local function visit(node)
         local k = nodeKey(node)
         if k and wanted[k] and not found[k] then
-            -- Dead keys (nil value, tag 0) are skipped, as in walkNodes.
+
             local okT, tt = pcall(mrd, "int", node + 12)
             if okT and tt ~= 0 then found[k], n = node, n + 1 end
         end
@@ -1900,18 +1833,7 @@ local function walkAround(center, span, wanted)
     return found, n
 end
 
--- A node inside ItemLibrary.ViewModels and one inside CosmeticLibrary.Cosmetics.
--- The registry route: finds a module's table in about 2 ms instead of a heap
--- scan. Roblox keeps every required module's result in the Lua registry, and
--- the ModuleScript instance - found by name, instantly - remembers both the
--- VM's main thread (+0x168) and its registry slot (+0x188, an int). The main
--- thread is allocated together with the VM's global state, which it points at
--- from +0x48; the global state holds the registry at +0x618. Tables here keep
--- their node array at +0x20 and array part at +0x28, 16-byte slots. Every step
--- is checked by the object's type tag (table 7, thread 10 in this build), and
--- anything unexpected - a Roblox update moving these offsets - returns nil so
--- the caller falls back to the scan. Found live 2026-09-18; it landed on the
--- exact table the scan finds.
+-- Registry route
 local ROUTE = {thread = 0x168, slot = 0x188, globalState = 0x48, registry = 0x618, node = 0x20, array = 0x28}
 local TAG_TABLE, TAG_THREAD = 7, 10
 
@@ -1932,11 +1854,6 @@ local function moduleTable(ms)
     return t
 end
 
--- The node array of a table whose layout is known, and the wanted keys in it.
--- Not tableFields: that guesses which header pointer is the node array, and a
--- dictionary's other pointers (its metatable, its array part) can lead to a
--- different table holding the same name - it picked a foreign "Assault Rifle"
--- in one server and every lookup after it came back empty.
 local function nodesOf(t, maxNodes, wanted)
     local base = t and t > 0x10000 and rbyte(t) == TAG_TABLE and rd(t + ROUTE.node)
     if not base or base < 0x10000 then return nil end
@@ -1944,10 +1861,6 @@ local function nodesOf(t, maxNodes, wanted)
     return found, n, base
 end
 
--- ViewModels / Cosmetics via the registry: an anchor node inside each (the
--- same thing the scan returns) and the start of its node array, so lookups
--- can walk the real array only. The module tables are recognised by their
--- keys, as the scan's fallback does, so a wrong slot is never mistaken for one.
 local function dictionariesViaRegistry(wantVm, wantCos)
     local mods = game:GetService("ReplicatedStorage"):FindFirstChild("Modules")
     local vm, cos, vmBase, cosBase
@@ -1966,10 +1879,10 @@ local function dictionariesViaRegistry(wantVm, wantCos)
     return vm, cos, vmBase, cosBase
 end
 
+-- Item dictionaries
 local function findDictionaries(cache, needVm, needCos)
     local vm, cos = nil, nil
-    -- cache.forceScan: a retry after a short sync goes straight to the heap scan,
-    -- a method independent of both the cache and the registry route.
+
     local forceScan = cache.forceScan
     if not forceScan then
         if needVm and cache.vm and select(2, walkAround(cache.vm, 2048, VM_ANCHOR)) > 0 then vm = cache.vm end
@@ -1993,17 +1906,15 @@ local function findDictionaries(cache, needVm, needCos)
         cache.route = "registry"
         return vm, cos
     end
-    -- The scan only knows a node somewhere inside each dictionary.
+
     cache.route, cache.vmBase, cache.cosBase = "scan", nil, nil
 
     local job = game.JobId
     local okG, rows = pcall(getgc, {SCAN_KEY})
-    -- A teleport during the scan frees everything it found.
+
     if game.JobId ~= job then return nil, nil, "server changed during the scan" end
     for _, r in ipairs(okG and type(rows) == "table" and rows or {}) do
-        -- The node's value tells the dictionaries apart: a ViewModels entry has
-        -- Animations, a Cosmetics entry Rarity and Type. The full dictionary
-        -- (not a partial copy) also holds the anchor name.
+
         local f = tableFields(rd(r.addr), 32, {Animations = true, Rarity = true, Type = true})
         if f and f.Animations then
             if needVm and not vm and select(2, walkAround(r.addr, 2048, VM_ANCHOR)) > 0 then vm = r.addr end
@@ -2012,8 +1923,6 @@ local function findDictionaries(cache, needVm, needCos)
         end
     end
 
-    -- AK-47 renamed or gone in a future update: find the dictionaries by the
-    -- module fields instead (slower, two keys).
     if (needVm and not vm) or (needCos and not cos) then
         if game.JobId ~= job then return nil, nil, "server changed during the scan" end
         local okF, frows = pcall(getgc, {"ViewModels", "Cosmetics"})
@@ -2035,6 +1944,7 @@ end
 local VM_FIELDS = {Animations = true, RootPartOffset = true, Image = true, ImageHighResolution = true}
 local WRAP_FIELDS = {WrapGroups = true}
 
+-- Animations, offsets, icons, wraps
 local function syncSkinData(pairList, wrapPairs, cache)
     if #pairList == 0 and #wrapPairs == 0 then return 0 end
     local vm, cos, err = findDictionaries(cache, #pairList > 0, #wrapPairs > 0)
@@ -2043,13 +1953,10 @@ local function syncSkinData(pairList, wrapPairs, cache)
     local vmWanted, cosWanted = {}, {}
     for _, p in ipairs(pairList) do vmWanted[p[1]], vmWanted[p[2]] = true, true end
     for _, p in ipairs(wrapPairs) do cosWanted[p[1]], cosWanted[p[2]] = true, true end
-    -- From the start of the real node array when the registry route found it
-    -- (first match wins, so every real key is met before anything past its
-    -- end); otherwise outward from the scan's node, nearest first.
+
     local vmNodes = vm and (cache.vmBase and walkNodes(cache.vmBase, 8192, vmWanted) or walkAround(vm, 2048, vmWanted)) or {}
     local cosNodes = cos and (cache.cosBase and walkNodes(cache.cosBase, 16384, cosWanted) or walkAround(cos, 4096, cosWanted)) or {}
 
-    -- Animations, RootPartOffset, Image, ImageHighResolution slots (false when absent).
     local function viewModelSlots(name)
         local node = vmNodes[name]
         local f = node and tableFields(rd(node), 32, VM_FIELDS)
@@ -2063,11 +1970,7 @@ local function syncSkinData(pairList, wrapPairs, cache)
         local d, k = viewModelSlots(p[1]), viewModelSlots(p[2])
         local vals = k and {rd(k[1]), rd(k[2]), k[3] and rd(k[3]), k[4] and rd(k[4])}
         if d and vals and vals[1] and vals[2] and vals[1] ~= 0 and vals[2] ~= 0 then
-            -- Overwrite and never undo: the default's own tables lose their
-            -- last reference and get collected, so writing them back later
-            -- would leave a dangling pointer (crashed a same-server re-run).
-            -- The skin's tables stay referenced by the skin's entry, which is
-            -- never written to.
+
             for j = 1, 4 do
                 if d[j] and vals[j] and vals[j] ~= 0 then wr(d[j], vals[j]) end
             end
@@ -2077,8 +1980,6 @@ local function syncSkinData(pairList, wrapPairs, cache)
         end
     end
 
-    -- Wraps: the owned wrap's WrapGroups slot points at the target's table,
-    -- the same overwrite-never-undo write.
     local function wrapGroupsSlot(name)
         local node = cosNodes[name]
         local f = node and tableFields(rd(node), 32, WRAP_FIELDS)
@@ -2099,12 +2000,12 @@ local function syncSkinData(pairList, wrapPairs, cache)
     return synced, note, wrapsApplied, wrapsMissed, missed
 end
 
+-- Skin swaps
 local function applySkinSwapper()
     if not isfile or not readfile then
         return 0, "Executor does not support isfile/readfile functions."
     end
-    
-    -- Search all possible candidate paths in workspace
+
     local candidatePaths = {
         "rivals_config.lua",
         "workspace/rivals_config.lua",
@@ -2130,7 +2031,7 @@ local function applySkinSwapper()
             end
         end)
     end
-    
+
     local targetFile = nil
     for _, path in ipairs(candidatePaths) do
         local ok, exists = pcall(isfile, path)
@@ -2139,22 +2040,21 @@ local function applySkinSwapper()
             break
         end
     end
-    
+
     if not targetFile then
         return 0, "rivals_config.lua was not found in your executor's workspace folder! Make sure rivals_config.lua is placed in your workspace directory."
     end
-    
+
     print("[RivalsSkinChanger] Config: " .. tostring(targetFile))
     local okRead, r2 = pcall(readfile, targetFile)
     if not okRead or not r2 then
         return 0, "Failed to read file '" .. tostring(targetFile) .. "'. File may be locked by another application."
     end
-    
-    -- Strip UTF-8 BOM if present
+
     if r2:sub(1, 3) == string.char(239, 187, 191) then
         r2 = r2:sub(4)
     end
-    
+
     if #r2:gsub("%s+", "") == 0 then
         return 0, "Config file '" .. tostring(targetFile) .. "' is completely empty (0 bytes). Please generate your config on the website."
     end
@@ -2172,22 +2072,25 @@ local function applySkinSwapper()
     local vmMods = LP.PlayerScripts:FindFirstChild("Modules")
     vmMods = vmMods and vmMods:FindFirstChild("ViewModels")
 
-    -- Each job is {weapon, target skin, source}: the source is the weapon for
-    -- Weapon=Skin lines and the owned skin for swap lines. The equipped item's
-    -- viewmodel name is the weapon for a default and the skin's name for a
-    -- skin, and the game finds the model, script, effects and ItemLibrary entry
-    -- by that name, so a swap line redirects the same things from the owned
-    -- skin's name. Swap lines run after every Weapon=Skin line.
     local jobs, swapJobs, touched, skippedConflicts = {}, {}, {}, {}
-    -- A "[Wraps]" header switches the rest of the file (until another header)
-    -- to OwnedWrap=TargetWrap lines, so one config file holds everything.
+
     local section = "skins"
     for _, rawLine in ipairs(r2:split(string.char(10))) do
         local header = rawLine:gsub(string.char(13), ""):match("^%s*%[%s*(.-)%s*%]%s*$")
         if header then
             local h = header:lower()
+
             section = h:find("wrap") and "wraps" or (h:find("sky") and "skybox"
-                or (h:find("light") and "lighting" or "skins"))
+                or (h:find("light") and "lighting" or (h:find("finisher") and "finishers"
+                or (h:find("charm") and "charms" or (h:find("skin") and "skins" or "other")))))
+        elseif section == "other" then
+
+        elseif section == "finishers" or section == "charms" then
+            local owned, target = parseConfigLine(rawLine)
+            if owned and target and owned ~= target then
+                local list = section == "finishers" and configFinishers or configCharms
+                list[#list + 1] = {owned, target}
+            end
         elseif section == "wraps" then
             local owned, target = parseConfigLine(rawLine)
             if owned and target then configWrapPairs[#configWrapPairs + 1] = {owned, target} end
@@ -2215,7 +2118,7 @@ local function applySkinSwapper()
         parsedPairs = parsedPairs + 1
         local skinLower = skinTarget:lower()
         local isSkin = skinLower ~= "default" and skinLower ~= "standard"
-        -- A model is swapped once: a second line on the same skin would swap it back.
+
         if isSkin and (touched[skinTarget] or touched[srcName]) then
             table.insert(skippedConflicts, srcName .. " -> " .. skinTarget)
         else
@@ -2227,14 +2130,7 @@ local function applySkinSwapper()
                     if ownedSwap then return findSkinModel(srcName) end
                     return wf:FindFirstChild(weaponName)
                 end
-                
-                -- 1. Viewmodel 3D Model Memory Swapping
-                -- wf existing doesn't mean every weapon slot inside it has
-                -- streamed in yet - confirmed live: manually re-running the
-                -- exact same swap on Chainsaw/Handsaws right after a run that
-                -- reported it missing worked immediately, so the object just
-                -- wasn't there yet at the moment this specific line ran.
-                -- Retry the base-weapon lookup too, not just the skin lookup.
+
                 local defModel = findSource()
                 if not defModel then
                     for _ = 1, 6 do
@@ -2246,13 +2142,7 @@ local function applySkinSwapper()
                 if not defModel then
                     table.insert(missingBaseWeapons, srcName)
                 else
-                    -- A skin-case folder can exist while its own children -
-                    -- especially heavier multi-part skins - are still
-                    -- streaming in. findSkinModel() only checks live state
-                    -- once; if that one check lands mid-stream it comes back
-                    -- nil and this weapon's skin is silently skipped for the
-                    -- rest of the run, even though the asset shows up a
-                    -- moment later. Retry a few times before giving up.
+
                     local skinModel = findSkinModel(skinTarget)
                     if not skinModel then
                         for _ = 1, 6 do
@@ -2266,7 +2156,7 @@ local function applySkinSwapper()
                     else
                         if defModel.Address and skinModel.Address and defModel.Address ~= skinModel.Address then
                             if ENABLE_RIG_FIXES then rigSkinModel(skinModel) end
-                            
+
                             local weaponLower = weaponName:lower()
                             if weaponLower:find("crossbow") or skinLower:find("crossbow") then
                                 if ENABLE_RIG_FIXES then pcall(fixCrossbowRig, skinModel) end
@@ -2281,11 +2171,7 @@ local function applySkinSwapper()
                             elseif weaponLower == "katana" or skinLower:find("katana") then
                                 if ENABLE_RIG_FIXES then pcall(fixKatanaRig, skinModel) end
                             end
-                            
-                            -- "Base" weapons (BaseSatchel, BaseDaggers, ...) have a viewmodel
-                            -- script per skin, default included, picked by the equipped skin's
-                            -- name. Swap it with the model or the default script drives the skin
-                            -- model, indexes parts it lacks, and the gun never builds.
+
                             local baseMod = vmMods and vmMods:FindFirstChild("Base" .. (weaponName:gsub(" ", "")))
                             local defMod = baseMod and baseMod:FindFirstChild(srcName)
                             local skinMod = baseMod and baseMod:FindFirstChild(skinTarget)
@@ -2297,11 +2183,7 @@ local function applySkinSwapper()
                                 if defMod and skinMod then
                                     swapTwoWay(defMod, skinMod, baseMod)
                                 elseif ownedSwap then
-                                    -- The model swap moved the names: skinModel now carries
-                                    -- the owned skin's name, defModel the target's. A target
-                                    -- script takes the owned name; an owned script with no
-                                    -- target counterpart takes the target's, so the family
-                                    -- default drives the model.
+
                                     local fam = baseMod or (vmMods and vmMods:FindFirstChild(weaponName))
                                     local om = fam and fam:FindFirstChild(srcName)
                                     local sm = fam and fam:FindFirstChild(skinTarget)
@@ -2313,11 +2195,7 @@ local function applySkinSwapper()
                                         copyName(om, defModel)
                                     end
                                 elseif not baseMod then
-                                    -- The weapon's own module is the default and special skins
-                                    -- are its children (Gunblade > Keyblade), picked by viewmodel
-                                    -- name. The child takes the weapon's name; the module keeps
-                                    -- its own, so the child's require of ViewModels.<weapon>
-                                    -- still resolves.
+
                                     local fam = vmMods and vmMods:FindFirstChild(weaponName)
                                     local sm = fam and fam:FindFirstChild(skinTarget)
                                     if sm and not fam:FindFirstChild(weaponName) and copyName(sm, fam) then
@@ -2328,8 +2206,7 @@ local function applySkinSwapper()
                         end
                     end
                 end
-                
-                -- 2. Throwables 3D Model Swapping (Molotov, Grenade, Flashbang, Satchel, Warpstone)
+
                 if tf and THROWABLES_NAMES[weaponName] then
                     local tb = tf:FindFirstChild(srcName)
                     local ts = tf:FindFirstChild(skinTarget)
@@ -2337,8 +2214,7 @@ local function applySkinSwapper()
                         swapTwoWay(tb, ts, tf)
                     end
                 end
-                
-                -- 3. Projectiles 3D Model Swapping (RPG, Bow, Crossbow, Slingshot, Freeze Ray, Distortion, Permafrost)
+
                 if pf and PROJECTILES_NAMES[weaponName] then
                     local pb = pf:FindFirstChild(srcName)
                     local ps = pf:FindFirstChild(skinTarget)
@@ -2346,19 +2222,14 @@ local function applySkinSwapper()
                         swapTwoWay(pb, ps, pf)
                     end
                 end
-                
-                -- 4. Misc Effects (Ground Fire, Explosions, Deflect FX, Flames, Portals)
+
                 if mi then
                     local spec = MISC_SPECIAL_MAP[skinTarget]
                     if spec then
                         for folderName, itemName in pairs(spec) do
                             local folder = mi:FindFirstChild(folderName)
                             if folder then
-                                -- Effects are looked up by viewmodel name with Default as the
-                                -- fallback (Katana: DeflectHitEffects:FindFirstChild(Name) or
-                                -- .Default). Default is what every other weapon using the folder
-                                -- falls back to - all fire weapons burn with BurningEffects.Default
-                                -- - so it is never touched: the skin's entry takes the weapon's name.
+
                                 local weaponItem = folder:FindFirstChild(srcName)
                                 local skinItem = folder:FindFirstChild(itemName)
                                 if skinItem and weaponItem then
@@ -2369,11 +2240,9 @@ local function applySkinSwapper()
                             end
                         end
                     end
-                    
-                    -- Explosion particles in Misc
+
                     local expSkin = MISC_EXPLOSIONS_MAP[skinTarget]
-                    -- An owned skin swaps only its own explosion: the weapon's base
-                    -- one belongs to the default.
+
                     local expBase = MISC_EXPLOSIONS_MAP[srcName]
                     if not ownedSwap then expBase = MISC_EXPLOSIONS_BASE[weaponName] end
                     if expSkin and expBase then
@@ -2385,12 +2254,11 @@ local function applySkinSwapper()
                     end
                 end
             end
-        end 
+        end
     end
-    
-    -- 5. Native SoundCallbacks Redirection
+
     pcall(applySoundCallbacks)
-    
+
     if swappedCount == 0 then
         if parsedPairs == 0 then
             return 0, "Found '" .. tostring(targetFile) .. "', but no valid Weapon=Skin lines were detected! Check file format."
@@ -2425,13 +2293,7 @@ local function applySkinSwapper()
     return swappedCount, nil
 end
 
--- Run swapper with error detection and reporting
--- Wait for the game to finish loading. Autoexec starts the script as soon as
--- the player joins; at that point Rivals hasn't required ItemLibrary yet, so
--- there are no item tables to find - the lookup comes back empty, the retry
--- scans for 30s for nothing, and every skin used to end up "not found". A
--- module that has been required has a registry slot, which moduleTable()
--- checks. Bounded (60s), and a teleport during the wait ends the run.
+-- Wait for the game
 local gameReady = false
 do
     local mods = game:GetService("ReplicatedStorage"):WaitForChild("Modules", 30)
@@ -2441,8 +2303,7 @@ do
     while tick() - t0 < 60 do
         local okI, itemTable = pcall(moduleTable, il)
         if okI and itemTable then
-            -- Wraps live in CosmeticLibrary, usually loaded alongside; give it
-            -- a few more seconds if it lags.
+
             for _ = 1, 10 do
                 local okC, cosTable = pcall(moduleTable, cl)
                 if okC and cosTable then break end
@@ -2483,7 +2344,6 @@ else
     notifyUser("Rivals Skin Changer", "Swapped " .. tostring(count) .. " skins - loading animations, offsets and icons...", 6)
 end
 
--- Real-time 2D Icon Engine
 local function replaceStandardIcon(label)
     if not label or not label.Address then return end
     local ptr = mrd("uintptr_t", label.Address + IMG_OFF)
@@ -2500,7 +2360,6 @@ local function replaceStandardIcon(label)
     end
 end
 
--- ZERO-LATENCY GUI Synchronizer Engine (RenderStepped + DescendantAdded)
 local runService = game:GetService("RunService")
 local renderSteppedConn = nil
 local pgDescConn = nil
@@ -2512,8 +2371,7 @@ local function fastSyncGui()
     local mg = pg and pg:FindFirstChild("MainGui")
     local mf = mg and mg:FindFirstChild("MainFrame")
     if not mf then return end
-    
-    -- 1. Hotbar Slots & EquippedDisplay (0ms frame-accurate replacement)
+
     local fi = mf:FindFirstChild("FighterInterfaces")
     local lni = fi and fi:FindFirstChild(LP.Name)
     if lni then
@@ -2554,8 +2412,7 @@ local function fastSyncGui()
             end
         end
     end
-    
-    -- 2. Equipment Page (0ms when open)
+
     local eq = mf:FindFirstChild("Equipment")
     if eq and eq.Visible then
         for _, d in ipairs(eq:GetDescendants()) do
@@ -2565,7 +2422,6 @@ local function fastSyncGui()
         end
     end
 
-    -- 3. PickWeapons & PickWeaponsList Menus (0ms when open)
     local pages = mf:FindFirstChild("Pages")
     if pages then
         local pw = pages:FindFirstChild("PickWeapons")
@@ -2591,7 +2447,7 @@ local function fastSyncGui()
                 end
             end
         end
-        
+
         local pw2 = pages:FindFirstChild("PickWeaponsList")
         if pw2 and pw2.Visible then
             local lc = pw2:FindFirstChild("ListContainer") and pw2.ListContainer:FindFirstChild("List") and pw2.ListContainer.List:FindFirstChild("Container")
@@ -2616,8 +2472,7 @@ local function fastSyncGui()
             end
         end
     end
-    
-    -- 4. Sniper Custom Reticles / Scopes
+
     local sniperSkin = ACTIVE_CONFIG_SKINS["Sniper"]
     local scopeConf = sniperSkin and SCOPE_RETICLES[sniperSkin]
     if scopeConf then
@@ -2633,13 +2488,11 @@ local function fastSyncGui()
     end
 end
 
--- Connect RenderStepped for frame-accurate zero delay
 pcall(function()
     if not ENABLE_PERSISTENT_FEATURES then return end
     renderSteppedConn = runService.RenderStepped:Connect(fastSyncGui)
 end)
 
--- Connect DescendantAdded for instant 0ms trigger on UI element creation
 pcall(function()
     local pg = LP:FindFirstChild("PlayerGui")
     if pg then
@@ -2662,13 +2515,10 @@ pcall(function()
     end
 end)
 
--- Wraps set on the skin site's Wraps tab (OwnedWrap=TargetWrap), applied in
--- the same memory scan as the skin data; RivalsWrapChanger.lua is no longer
--- needed alongside this script.
+-- Wraps
 local function readWrapPairs()
     local list, seen = {}, {}
-    -- The config file's [Wraps] section wins; a leftover rivals_wraps.lua only
-    -- adds wraps it doesn't mention.
+
     for _, p in ipairs(configWrapPairs) do
         if not seen[p[1]] then
             seen[p[1]] = true
@@ -2681,7 +2531,7 @@ local function readWrapPairs()
             local okR, content = pcall(readfile, p)
             if okR and content then
                 for line in content:gmatch("[^\r\n]+") do
-                    -- Lines starting with - are comments.
+
                     local owned, target = line:match("^%s*([^=%-][^=]-)%s*=%s*(.-)%s*$")
                     if owned and target and target ~= "" and not seen[owned] then
                         seen[owned] = true
@@ -2696,19 +2546,6 @@ local function readWrapPairs()
 end
 
 -- Skybox
---
--- The sky in Lighting is built by the game's LightingController from a Sky
--- template in PlayerScripts.(Assets|Modules).LightingProfiles - one profile per
--- map - and thrown away whenever the area changes. Overwriting the live one
--- does nothing: the engine loads a face's texture when the property is set and
--- caches it, and a raw write skips the setter (confirmed in game - the sky
--- doesn't change, not even with the DebugSkyGray flag toggled). So the changer
--- rewrites the templates instead, in place, and the game applies them itself
--- the next time it loads an area (joining a match, a round's map change,
--- entering or leaving the shooting range). Then the engine does load them,
--- because the game sets the properties the normal way.
---
--- Face ids of the skies the game ships with, Bk Dn Ft Lf Rt Up.
 local SKYBOX_PRESETS = {
     ["blue"] = {"14147881792", "14147882149", "14147882761", "14147883091", "14147882405", "14147881297"},
     ["station"] = {"2108482005", "2108545280", "2108482231", "2108482395", "2108482542", "2108482676"},
@@ -2717,8 +2554,7 @@ local SKYBOX_PRESETS = {
     ["space"] = {"10196550937", "10196550667", "10196550367", "10196550128", "10196549902", "10196567794"},
     ["westown"] = {"12261809766", "12261813110", "12261809766", "12261809766", "12261809766", "12261813678"},
     ["black"] = {"91612392386438", "91612392386438", "91612392386438", "91612392386438", "91612392386438", "91612392386438"},
-    -- Roblox's own classic sky, shipped inside the client: no upload and no
-    -- download, it just works.
+
     ["classic"] = {"rbxasset://sky/sky512_bk.tex", "rbxasset://sky/sky512_dn.tex", "rbxasset://sky/sky512_ft.tex",
                    "rbxasset://sky/sky512_lf.tex", "rbxasset://sky/sky512_rt.tex", "rbxasset://sky/sky512_up.tex"}
 }
@@ -2731,9 +2567,6 @@ local function skyboxAssetId(v)
     return digits and ("rbxassetid://" .. digits) or nil
 end
 
--- A Roblox string in place: the buffer can't grow, so a face is left alone when
--- the new id is longer than what the game allocated (ids run to 28 characters
--- against a capacity of 31, so this is headroom, not a limit in practice).
 local function writeRobloxString(base, str)
     local ptr, cap = rd(base), mrd("uint64_t", base + 24)
     if not ptr or not cap or ptr < 0x10000 or #str > cap then return false end
@@ -2757,16 +2590,11 @@ local function applySkybox(conf)
         local one = conf[f[1]] and skyboxAssetId(conf[f[1]])
         if one then ids[i] = one end
     end
-    -- A face left out keeps the map's own texture, so a config can change just
-    -- the top, or all six.
+
     local given = 0
     for i = 1, 6 do if ids[i] then given = given + 1 end end
     if given == 0 then return 0, nil end
 
-    -- Every template the game could apply, plus the live sky so anything reading
-    -- it sees the same thing. StarterPlayerScripts keeps its own copy of the
-    -- profiles. The folders are named, so this normally touches a few dozen
-    -- instances instead of walking the tree.
     local skies, seen = {}, {}
     local function add(inst)
         if inst and inst.ClassName == "Sky" and inst.Address and not seen[inst.Address] then
@@ -2777,8 +2605,7 @@ local function applySkybox(conf)
     local roots = {}
     local playerScripts = LP:FindFirstChild("PlayerScripts")
     local starterScripts = game:GetService("StarterPlayer"):FindFirstChild("StarterPlayerScripts")
-    -- Never ipairs a list that can hold a nil: it stops at the hole and the
-    -- whole thing silently finds nothing.
+
     if playerScripts then roots[#roots + 1] = playerScripts end
     if starterScripts then roots[#roots + 1] = starterScripts end
     for _, root in ipairs(roots) do
@@ -2790,12 +2617,7 @@ local function applySkybox(conf)
             end
         end
     end
-    -- PlayerScripts is the copy the game actually runs from, and Matcha
-    -- sometimes can't reach it by name at all - FindFirstChild, the property and
-    -- WaitForChild all come back nil while GetDescendants still walks it. Pay
-    -- for the slow walk only in that case, and take only the profile skies:
-    -- every other Sky under the player is the backdrop of a cosmetic or emote
-    -- preview in the menus.
+
     if not playerScripts then
         for _, d in ipairs(LP:GetDescendants()) do
             local profiles = d.Parent and d.Parent.Parent
@@ -2817,15 +2639,6 @@ local function applySkybox(conf)
 end
 
 -- Lighting
---
--- Unlike the sky, Lighting's own numbers are read live: writing Brightness or
--- ExposureCompensation into the Lighting instance darkens the game on the spot.
--- They don't stick, though - the game's LightingController re-applies a profile
--- on every area change and puts its own numbers back. Each profile is a Lua
--- table holding Brightness, ExposureCompensation, Ambient, OutdoorAmbient and
--- the rest, so the tables are patched as well and the game then applies the
--- dark values itself. Colors in those tables are Color3 userdata: three floats
--- at +16, +20, +24.
 local LIGHTING_FIELDS = {
     brightness = {off = 0x118, key = "Brightness"},
     exposure = {off = 0x124, key = "ExposureCompensation"},
@@ -2841,7 +2654,6 @@ local LIGHTING_PRESETS = {
 }
 local COLOR3_FLOATS = 16
 
--- A grey level (0.02), a percentage-free number, or #rrggbb.
 local function lightingColor(v)
     local hex = tostring(v):match("^#?(%x%x%x%x%x%x)$")
     if hex then
@@ -2861,7 +2673,6 @@ local function applyLighting(conf, cache)
     end
     if not next(values) then return 0, nil end
 
-    -- The live Lighting instance: this is what shows immediately.
     local L = game:GetService("Lighting")
     local applied = 0
     for name, raw in pairs(values) do
@@ -2885,18 +2696,13 @@ local function applyLighting(conf, cache)
         end
     end
 
-    -- The profile tables, so an area change doesn't undo it. A node keyed
-    -- ExposureCompensation with Brightness right after it is a profile.
     local nodes = {}
     for _, addr in ipairs(cache.lightNodes or {}) do
         if nodeKey(addr) == "ExposureCompensation" and nodeKey(addr + NODE_SIZE) == "Brightness" then
             nodes[#nodes + 1] = addr
         end
     end
-    -- Each profile is a ModuleScript under Modules.LightingProfiles returning a
-    -- table whose LightingProperties holds these numbers, so the registry route
-    -- reaches them in milliseconds. Profiles load lazily: only the maps visited
-    -- in this server have a table yet, which is also all the scan could find.
+
     if #nodes == 0 then
         local lpFolders = {}
         local ps = LP:FindFirstChild("PlayerScripts")
@@ -2931,7 +2737,7 @@ local function applyLighting(conf, cache)
 
     local profiles = 0
     for _, exposureNode in ipairs(nodes) do
-        -- Walk the profile's own nodes: they sit within a few slots of each other.
+
         local wrote = false
         for i = -12, 12 do
             local node = exposureNode + i * NODE_SIZE
@@ -2972,12 +2778,6 @@ if ENABLE_SKIN_DATA_SYNC and (#skinDataPairs > 0 or #wrapPairs > 0) then
     local okS, synced, note, wrapsApplied, wrapsMissed, skinsMissed = pcall(syncSkinData, skinDataPairs, wrapPairs, dictCache)
     local firstRoute = dictCache.route
 
-    -- Short of N/N: look again. Writes are the same values into the same slots,
-    -- so a second pass only fills in what the first one missed. First a fresh
-    -- registry lookup (milliseconds), then the full heap scan (~30s), which
-    -- finds the tables by a different method altogether. Names still missing
-    -- after the scan aren't in the game at all (a typo, a removed skin); they
-    -- are kept in dictCache for this server so a rerun doesn't scan for them.
     dictCache.knownMissing = dictCache.knownMissing or {}
     local function unexplained()
         local n = 0
@@ -2992,7 +2792,7 @@ if ENABLE_SKIN_DATA_SYNC and (#skinDataPairs > 0 or #wrapPairs > 0) then
         dictCache.forceScan = forceScan
         local ok2, s2, n2, w2, wm2, sm2 = pcall(syncSkinData, skinDataPairs, wrapPairs, dictCache)
         dictCache.forceScan = nil
-        -- Keep whichever pass got further; earlier writes stay applied either way.
+
         if ok2 and ((s2 or 0) + (w2 or 0)) >= ((synced or 0) + (wrapsApplied or 0)) then
             okS, synced, note, wrapsApplied, wrapsMissed, skinsMissed = ok2, s2, n2, w2, wm2, sm2
         end
@@ -3050,8 +2850,110 @@ do
     end
 end
 
-_G.__RIVALS_SKIN_CHANGER_STATE = {restores = memoryRestores, wfAddr = wf.Address, nameCopies = nameCopies, dicts = dictCache}
-_G.__RIVALS_SKIN_CHANGER_BUSY = nil
+-- Finishers and charms
+-- Season rank charms
+local floatRestores = {}
+local function showOnlyVariant(model, keepName)
+    local extra = model:FindFirstChild("Extra")
+    local keep = extra and extra:FindFirstChild(keepName)
+    if not keep then return false end
+    for _, v in ipairs(extra:GetChildren()) do
+        if v.Address ~= keep.Address then
+            local parts = v:GetDescendants()
+            parts[#parts + 1] = v
+            for _, d in ipairs(parts) do
+                local c = d.ClassName
+                if c == "Part" or c == "MeshPart" or c == "UnionOperation" then
+                    local addr = d.Address + OFF.Transparency
+                    local okR, old = pcall(mrd, "float", addr)
+                    if okR and old then
+                        floatRestores[#floatRestores + 1] = {addr, old}
+                        pcall(mwr, "float", addr, 1)
+                    end
+                end
+            end
+        end
+    end
+    return true
+end
 
--- No teardown hooks: Matcha doesn't support BindToClose, OnTeleport,
--- TeleportInit, PlayerRemoving or AncestryChanged (they read as nil).
+local function applyCosmetics()
+    if #configFinishers == 0 and #configCharms == 0 then return nil end
+    local modules = game:GetService("ReplicatedStorage"):FindFirstChild("Modules")
+    local finishers = modules and modules:FindFirstChild("Finishers")
+    local charmModels = A and A:FindFirstChild("Charms")
+    local psModules = psRoot and psRoot:FindFirstChild("Modules")
+    local charmScripts = psModules and psModules:FindFirstChild("Charms")
+    local used, done, missed = {}, {}, {}
+    local function claim(kind, a, b)
+        if used[kind .. a] or used[kind .. b] then return false end
+        used[kind .. a], used[kind .. b] = true, true
+        return true
+    end
+    for _, p in ipairs(configFinishers) do
+        local owned, target = p[1], p[2]
+        local a = finishers and finishers:FindFirstChild(owned)
+        local b = finishers and finishers:FindFirstChild(target)
+        if not a or not b then
+            missed[#missed + 1] = owned .. "=" .. target .. " (" .. (not a and owned or target) .. " isn't a finisher)"
+        elseif not claim("f:", owned, target) then
+            missed[#missed + 1] = owned .. "=" .. target .. " (already used by another line)"
+        elseif swapTwoWay(a, b, finishers) then
+            done[#done + 1] = owned .. " -> " .. target
+        else
+            missed[#missed + 1] = owned .. "=" .. target .. " (swap failed)"
+        end
+    end
+    for _, p in ipairs(configCharms) do
+        local owned, target = p[1], p[2]
+        local a = charmModels and charmModels:FindFirstChild(owned)
+        local b = charmModels and charmModels:FindFirstChild(target)
+        local variant
+        if not b and charmModels then
+            local base, rank = target:match("^(Season %d+)%s+(.+)$")
+            local m = base and charmModels:FindFirstChild(base)
+            local extra = m and m:FindFirstChild("Extra")
+            if extra and extra:FindFirstChild(rank) then b, variant = m, rank end
+        end
+        if not a or not b then
+            missed[#missed + 1] = owned .. "=" .. target .. " (" .. (not a and owned or target) .. " isn't a charm)"
+        elseif not claim("c:", owned, variant and b.Name or target) then
+            missed[#missed + 1] = owned .. "=" .. target .. " (already used by another line)"
+        elseif swapTwoWay(a, b, charmModels) then
+            if variant then showOnlyVariant(b, variant) end
+            local oa = charmScripts and charmScripts:FindFirstChild(owned)
+            local ob = charmScripts and charmScripts:FindFirstChild(target)
+            if oa and ob then
+                swapTwoWay(oa, ob, charmScripts)
+            elseif ob then
+                copyName(ob, b)
+            elseif oa then
+                copyName(oa, a)
+            end
+            done[#done + 1] = owned .. " -> " .. target
+        else
+            missed[#missed + 1] = owned .. "=" .. target .. " (swap failed)"
+        end
+    end
+    return done, missed
+end
+
+do
+    local okC, done, missed = pcall(applyCosmetics)
+    if not okC then
+        print("[RivalsSkinChanger] Finishers/charms error: " .. tostring(done))
+    elseif done then
+        if #done > 0 then
+            local msg = "Finishers/charms: " .. table.concat(done, ", ")
+            print("[RivalsSkinChanger] " .. msg .. " - finishers show from their next use, charms on the next equip")
+            notifyUser("Rivals Skin Changer", msg, 6)
+        end
+        if #missed > 0 then
+            print("[RivalsSkinChanger] Finishers/charms not applied: " .. table.concat(missed, "; "))
+        end
+    end
+end
+
+-- Save state
+_G.__RIVALS_SKIN_CHANGER_STATE = {restores = memoryRestores, wfAddr = wf.Address, nameCopies = nameCopies, dicts = dictCache, floats = floatRestores}
+_G.__RIVALS_SKIN_CHANGER_BUSY = nil
