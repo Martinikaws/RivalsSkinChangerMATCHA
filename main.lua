@@ -73,7 +73,7 @@ local OFF = {
     Parent = 104,
     NameContainer = 112,
     Children = 120,
-    Transparency = 304
+    Transparency = 288
 }
 
 -- Run lock
@@ -1834,7 +1834,7 @@ local function walkAround(center, span, wanted)
 end
 
 -- Registry route
-local ROUTE = {thread = 0x168, slot = 0x188, globalState = 0x48, registry = 0x618, node = 0x20, array = 0x28}
+local ROUTE = {thread = 0x170, slot = 0x178, globalState = 0x18, registry = 0x620, node = 0x18, array = 0x20}
 local TAG_TABLE, TAG_THREAD = 7, 10
 
 local function rbyte(a) local ok, v = pcall(mrd, "byte", a) return ok and v or nil end
@@ -2558,7 +2558,7 @@ local SKYBOX_PRESETS = {
     ["classic"] = {"rbxasset://sky/sky512_bk.tex", "rbxasset://sky/sky512_dn.tex", "rbxasset://sky/sky512_ft.tex",
                    "rbxasset://sky/sky512_lf.tex", "rbxasset://sky/sky512_rt.tex", "rbxasset://sky/sky512_up.tex"}
 }
-local SKYBOX_FACES = {{"bk", 0xf8}, {"dn", 0x128}, {"ft", 0x158}, {"lf", 0x188}, {"rt", 0x1b8}, {"up", 0x1e8}}
+local SKYBOX_FACES = {{"bk", 0xe8}, {"dn", 0x118}, {"ft", 0x148}, {"lf", 0x178}, {"rt", 0x1a8}, {"up", 0x1d8}}
 
 local function skyboxAssetId(v)
     v = tostring(v):match("^%s*(.-)%s*$")
@@ -2640,14 +2640,14 @@ end
 
 -- Lighting
 local LIGHTING_FIELDS = {
-    brightness = {off = 0x118, key = "Brightness"},
-    exposure = {off = 0x124, key = "ExposureCompensation"},
-    diffuse = {off = 0x11c, key = "EnvironmentDiffuseScale"},
-    specular = {off = 0x120, key = "EnvironmentSpecularScale"},
+    brightness = {off = 0x108, key = "Brightness"},
+    exposure = {off = 0x114, key = "ExposureCompensation"},
+    diffuse = {off = 0x10c, key = "EnvironmentDiffuseScale"},
+    specular = {off = 0x110, key = "EnvironmentSpecularScale"},
     shadowsoftness = {off = nil, key = "ShadowSoftness"},
-    ambient = {off = 0xd0, key = "Ambient", color = true},
-    outdoor = {off = 0x100, key = "OutdoorAmbient", color = true},
-    fogcolor = {off = 0xf4, key = "FogColor", color = true}
+    ambient = {off = 0xc0, key = "Ambient", color = true},
+    outdoor = {off = 0xf0, key = "OutdoorAmbient", color = true},
+    fogcolor = {off = 0xe4, key = "FogColor", color = true}
 }
 local LIGHTING_PRESETS = {
     ["dark"] = {brightness = 0.35, exposure = -1.3, diffuse = 0.15, specular = 0.2, ambient = 0.02, outdoor = 0.03, fogcolor = 0.02}
