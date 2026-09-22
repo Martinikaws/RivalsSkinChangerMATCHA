@@ -26,6 +26,20 @@ end
 _G.__RIVALS_SKIN_CHANGER_RESTORE = nil
 _G.__RIVALS_SKIN_CHANGER_ACTIVE = nil
 
+-- Run lock
+local RUN_LOCK_SECONDS = 180
+do
+    local busy = _G.__RIVALS_SKIN_CHANGER_BUSY
+    if type(busy) == "number" and tick() - busy < RUN_LOCK_SECONDS then
+        print("[RivalsSkinChanger] Already running - wait for it to finish, then run it again if needed")
+        if typeof(notify) == "function" then
+            pcall(notify, "Already running - wait for it to finish", "Rivals Skin Changer", 5)
+        end
+        return
+    end
+    _G.__RIVALS_SKIN_CHANGER_BUSY = tick()
+end
+
 if typeof(notify) == "function" then pcall(notify, "Starting - applying your skins...", "Rivals Skin Changer", 5) end
 
 -- Game folders
@@ -43,6 +57,7 @@ local tf = A and A:FindFirstChild("Throwables")
 local pf = A and A:FindFirstChild("Projectiles")
 
 if not wf then
+    _G.__RIVALS_SKIN_CHANGER_BUSY = nil
     return
 end
 
@@ -75,20 +90,6 @@ local OFF = {
     Children = 120,
     Transparency = 288
 }
-
--- Run lock
-local RUN_LOCK_SECONDS = 180
-do
-    local busy = _G.__RIVALS_SKIN_CHANGER_BUSY
-    if type(busy) == "number" and tick() - busy < RUN_LOCK_SECONDS then
-        print("[RivalsSkinChanger] Already running - wait for it to finish, then run it again if needed")
-        if typeof(notify) == "function" then
-            pcall(notify, "Already running - wait for it to finish", "Rivals Skin Changer", 5)
-        end
-        return
-    end
-    _G.__RIVALS_SKIN_CHANGER_BUSY = tick()
-end
 
 -- Undo the previous run
 local dictCache = {}
@@ -195,26 +196,25 @@ end
 local function checkImgOffset()
     local pg = LP:FindFirstChild("PlayerGui")
     if not pg then return end
+    local votes, checked = {}, 0
     for _, d in ipairs(pg:GetDescendants()) do
         if d.ClassName == "ImageLabel" and d.Address then
-            local p = mrd("uintptr_t", d.Address + IMG_OFF)
-            if p and p > 0x10000000000 and p < 0x7FFFFFFFFFFF then
-                local s = mrd("string", p)
-                if s and s:find("rbxassetid://") then return end
-            end
+            checked = checked + 1
             for off = 0x980, 0xB00, 8 do
                 local ptr = mrd("uintptr_t", d.Address + off)
                 if ptr and ptr > 0x10000000000 and ptr < 0x7FFFFFFFFFFF then
                     local s = mrd("string", ptr)
-                    if s and s:find("rbxassetid://") then
-                        IMG_OFF = off
-                        return
-                    end
+                    if s and s:find("rbxassetid://") then votes[off] = (votes[off] or 0) + 1 end
                 end
             end
-            break
+            if checked >= 40 then break end
         end
     end
+    local best, bestN = nil, 0
+    for off, n in pairs(votes) do
+        if n > bestN then best, bestN = off, n end
+    end
+    if best and bestN >= 2 then IMG_OFF = best end
 end
 pcall(checkImgOffset)
 
@@ -1778,6 +1778,15 @@ local function nodeKey(node)
     if ok and type(str) == "string" and #str > 0 and #str < 80 then return str end
 end
 
+-- 2^lsizenode (byte +6) is the real node count; walking past it reads other
+-- tables' nodes and can match a foreign entry with the same key.
+local function nodeCount(t)
+    if not t or t < 0x10000 then return nil end
+    local ok, l = pcall(mrd, "byte", t + 6)
+    if not ok or not l or l < 0 or l > 20 then return nil end
+    return 2 ^ l
+end
+
 local function walkNodes(base, maxNodes, wanted)
     local found, n, readable, want = {}, 0, 0, 0
     for _ in pairs(wanted) do want = want + 1 end
@@ -1800,6 +1809,7 @@ end
 
 local function tableFields(t, maxNodes, wanted)
     if not t or t < 0x10000 then return nil, 0 end
+    maxNodes = math.min(maxNodes, nodeCount(t) or maxNodes)
     local best, bestN, bestBase = nil, 0, nil
     for off = 0, 56, 8 do
         local base = rd(t + off)
@@ -1857,26 +1867,27 @@ end
 local function nodesOf(t, maxNodes, wanted)
     local base = t and t > 0x10000 and rbyte(t) == TAG_TABLE and rd(t + ROUTE.node)
     if not base or base < 0x10000 then return nil end
-    local found, n = walkNodes(base, maxNodes, wanted)
-    return found, n, base
+    local count = math.min(maxNodes, nodeCount(t) or maxNodes)
+    local found, n = walkNodes(base, count, wanted)
+    return found, n, base, count
 end
 
 local function dictionariesViaRegistry(wantVm, wantCos)
     local mods = game:GetService("ReplicatedStorage"):FindFirstChild("Modules")
-    local vm, cos, vmBase, cosBase
+    local vm, cos, vmBase, cosBase, vmCount, cosCount
     if wantVm then
         local f = nodesOf(moduleTable(mods and mods:FindFirstChild("ItemLibrary")), 256, {ViewModels = true, ViewModelOrder = true})
         local dict = f and f.ViewModels and f.ViewModelOrder and rd(f.ViewModels)
-        local d, _, base = nodesOf(dict, 8192, VM_ANCHOR)
-        if d and d["Assault Rifle"] then vm, vmBase = d["Assault Rifle"], base end
+        local d, _, base, count = nodesOf(dict, 8192, VM_ANCHOR)
+        if d and d["Assault Rifle"] then vm, vmBase, vmCount = d["Assault Rifle"], base, count end
     end
     if wantCos then
         local f = nodesOf(moduleTable(mods and mods:FindFirstChild("CosmeticLibrary")), 256, {Cosmetics = true})
         local dict = f and f.Cosmetics and rd(f.Cosmetics)
-        local d, _, base = nodesOf(dict, 16384, COS_ANCHOR)
-        if d and d["Glass"] then cos, cosBase = d["Glass"], base end
+        local d, _, base, count = nodesOf(dict, 16384, COS_ANCHOR)
+        if d and d["Glass"] then cos, cosBase, cosCount = d["Glass"], base, count end
     end
-    return vm, cos, vmBase, cosBase
+    return vm, cos, vmBase, cosBase, vmCount, cosCount
 end
 
 -- Item dictionaries
@@ -1893,13 +1904,14 @@ local function findDictionaries(cache, needVm, needCos)
         end
     end
 
-    local okR, rvm, rcos, rvmBase, rcosBase = false, nil, nil, nil, nil
+    local okR, rvm, rcos, rvmBase, rcosBase, rvmCount, rcosCount = false, nil, nil, nil, nil, nil, nil
     if not forceScan then
-        okR, rvm, rcos, rvmBase, rcosBase = pcall(dictionariesViaRegistry, needVm and not vm, needCos and not cos)
+        okR, rvm, rcos, rvmBase, rcosBase, rvmCount, rcosCount =
+            pcall(dictionariesViaRegistry, needVm and not vm, needCos and not cos)
     end
     if okR then
-        if rvm then vm, cache.vmBase = rvm, rvmBase end
-        if rcos then cos, cache.cosBase = rcos, rcosBase end
+        if rvm then vm, cache.vmBase, cache.vmCount = rvm, rvmBase, rvmCount end
+        if rcos then cos, cache.cosBase, cache.cosCount = rcos, rcosBase, rcosCount end
     end
     if (vm or not needVm) and (cos or not needCos) then
         cache.vm, cache.cos = vm or cache.vm, cos or cache.cos
@@ -1907,7 +1919,7 @@ local function findDictionaries(cache, needVm, needCos)
         return vm, cos
     end
 
-    cache.route, cache.vmBase, cache.cosBase = "scan", nil, nil
+    cache.route, cache.vmBase, cache.cosBase, cache.vmCount, cache.cosCount = "scan", nil, nil, nil, nil
 
     local job = game.JobId
     local okG, rows = pcall(getgc, {SCAN_KEY})
@@ -1954,8 +1966,8 @@ local function syncSkinData(pairList, wrapPairs, cache)
     for _, p in ipairs(pairList) do vmWanted[p[1]], vmWanted[p[2]] = true, true end
     for _, p in ipairs(wrapPairs) do cosWanted[p[1]], cosWanted[p[2]] = true, true end
 
-    local vmNodes = vm and (cache.vmBase and walkNodes(cache.vmBase, 8192, vmWanted) or walkAround(vm, 2048, vmWanted)) or {}
-    local cosNodes = cos and (cache.cosBase and walkNodes(cache.cosBase, 16384, cosWanted) or walkAround(cos, 4096, cosWanted)) or {}
+    local vmNodes = vm and (cache.vmBase and walkNodes(cache.vmBase, cache.vmCount or 8192, vmWanted) or walkAround(vm, 2048, vmWanted)) or {}
+    local cosNodes = cos and (cache.cosBase and walkNodes(cache.cosBase, cache.cosCount or 16384, cosWanted) or walkAround(cos, 4096, cosWanted)) or {}
 
     local function viewModelSlots(name)
         local node = vmNodes[name]
