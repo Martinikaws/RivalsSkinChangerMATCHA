@@ -55,6 +55,7 @@ local wf = vm and vm:WaitForChild("Weapons", 30)
 local mi = A and A:WaitForChild("Misc", 10)
 local tf = A and A:FindFirstChild("Throwables")
 local pf = A and A:FindFirstChild("Projectiles")
+local stf = A and A:FindFirstChild("SpearTightropes")
 
 if not wf then
     _G.__RIVALS_SKIN_CHANGER_BUSY = nil
@@ -1383,15 +1384,6 @@ local SCOPE_RETICLES = {
     }
 }
 
-local THROWABLES_NAMES = {
-    Molotov = true, Grenade = true, Flashbang = true,
-    ["Smoke Grenade"] = true, Satchel = true, Warpstone = true
-}
-local PROJECTILES_NAMES = {
-    RPG = true, Bow = true, Crossbow = true, Slingshot = true,
-    ["Freeze Ray"] = true, Daggers = true, ["Flare Gun"] = true,
-    Distortion = true, Permafrost = true, ["Grenade Launcher"] = true
-}
 
 local _scriptAlive = true
 
@@ -2130,6 +2122,9 @@ local function applySkinSwapper()
         parsedPairs = parsedPairs + 1
         local skinLower = skinTarget:lower()
         local isSkin = skinLower ~= "default" and skinLower ~= "standard"
+        -- Set once the skin's own viewmodel script is in place. That script
+        -- finds its effects by their real names, so they must not be renamed.
+        local scriptMoved = false
 
         if isSkin and (touched[skinTarget] or touched[srcName]) then
             table.insert(skippedConflicts, srcName .. " -> " .. skinTarget)
@@ -2193,15 +2188,16 @@ local function applySkinSwapper()
                                 swappedCount = swappedCount + 1
                                 table.insert(skinDataPairs, {srcName, skinTarget})
                                 if defMod and skinMod then
-                                    swapTwoWay(defMod, skinMod, baseMod)
+                                    scriptMoved = swapTwoWay(defMod, skinMod, baseMod) and true or false
                                 elseif ownedSwap then
 
                                     local fam = baseMod or (vmMods and vmMods:FindFirstChild(weaponName))
                                     local om = fam and fam:FindFirstChild(srcName)
                                     local sm = fam and fam:FindFirstChild(skinTarget)
                                     if om and sm then
-                                        swapTwoWay(om, sm, fam)
+                                        scriptMoved = swapTwoWay(om, sm, fam) and true or false
                                     elseif sm and copyName(sm, skinModel) then
+                                        scriptMoved = true
                                         table.insert(renamedScripts, {srcName, skinTarget})
                                     elseif om then
                                         copyName(om, defModel)
@@ -2211,6 +2207,7 @@ local function applySkinSwapper()
                                     local fam = vmMods and vmMods:FindFirstChild(weaponName)
                                     local sm = fam and fam:FindFirstChild(skinTarget)
                                     if sm and not fam:FindFirstChild(weaponName) and copyName(sm, fam) then
+                                        scriptMoved = true
                                         table.insert(renamedScripts, {weaponName, skinTarget})
                                     end
                                 end
@@ -2219,19 +2216,18 @@ local function applySkinSwapper()
                     end
                 end
 
-                if tf and THROWABLES_NAMES[weaponName] then
-                    local tb = tf:FindFirstChild(srcName)
-                    local ts = tf:FindFirstChild(skinTarget)
-                    if tb and ts then
-                        swapTwoWay(tb, ts, tf)
-                    end
-                end
-
-                if pf and PROJECTILES_NAMES[weaponName] then
-                    local pb = pf:FindFirstChild(srcName)
-                    local ps = pf:FindFirstChild(skinTarget)
-                    if pb and ps then
-                        swapTwoWay(pb, ps, pf)
+                -- Thrown, fired and stuck-in-the-wall copies of the item (a
+                -- grenade in flight, an arrow, the thrown spear and its rope).
+                -- The game picks them by skin name, for every weapon.
+                for _, folder in ipairs({tf or false, pf or false, stf or false}) do
+                    local ts = folder and folder:FindFirstChild(skinTarget)
+                    if ts then
+                        local tb = folder:FindFirstChild(srcName)
+                        if tb then
+                            swapTwoWay(tb, ts, folder)
+                        else
+                            copyName(ts, ownedSwap and findSkinModel(srcName) or wf:FindFirstChild(weaponName))
+                        end
                     end
                 end
 
@@ -2253,11 +2249,36 @@ local function applySkinSwapper()
                         end
                     end
 
+                    -- Every other effect folder keyed by skin name (muzzle flashes,
+                    -- flames, deflects...): the owned item takes the target's entry.
+                    -- A variant of the owned entry ("Hyperlaser Guns Red") would
+                    -- still win for its hand, so it is renamed out of the way.
+                    for _, folder in ipairs(mi:GetChildren()) do
+                        if folder.ClassName == "Folder" and not (spec and spec[folder.Name]) then
+                            local skinItem = folder:FindFirstChild(skinTarget)
+                            if skinItem then
+                                local weaponItem = folder:FindFirstChild(srcName)
+                                if weaponItem then
+                                    swapTwoWay(weaponItem, skinItem, folder)
+                                else
+                                    copyName(skinItem, ownedSwap and findSkinModel(srcName) or wf:FindFirstChild(weaponName))
+                                end
+                                local prefix = srcName .. " "
+                                for _, v in ipairs(folder:GetChildren()) do
+                                    if v.Name:sub(1, #prefix) == prefix and not findSkinModel(v.Name)
+                                        and not folder:FindFirstChild(skinTarget .. v.Name:sub(#prefix)) then
+                                        copyName(v, folder)
+                                    end
+                                end
+                            end
+                        end
+                    end
+
                     local expSkin = MISC_EXPLOSIONS_MAP[skinTarget]
 
                     local expBase = MISC_EXPLOSIONS_MAP[srcName]
                     if not ownedSwap then expBase = MISC_EXPLOSIONS_BASE[weaponName] end
-                    if expSkin and expBase then
+                    if expSkin and expBase and not scriptMoved then
                         local sx = mi:FindFirstChild(expSkin)
                         local dx = mi:FindFirstChild(expBase)
                         if sx and dx then
